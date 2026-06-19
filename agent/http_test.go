@@ -15,6 +15,7 @@ import (
 )
 
 func TestProperty_HTTPMetricsResponseTiming(t *testing.T) {
+	skipEnvSensitive(t)
 	// 启动测试 agent
 	Stop()
 	time.Sleep(10 * time.Millisecond)

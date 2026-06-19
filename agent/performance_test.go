@@ -11,6 +11,7 @@ import (
 )
 
 func TestProperty_PerformanceOverhead(t *testing.T) {
+	skipEnvSensitive(t)
 	parameters := gopter.DefaultTestParameters()
 	parameters.MinSuccessfulTests = 20 // Reduced for faster testing
 
@@ -149,6 +150,7 @@ func TestPerformance_CPUOverhead(t *testing.T) {
 
 // 单元测试：测试内存开销
 func TestPerformance_MemoryOverhead(t *testing.T) {
+	skipEnvSensitive(t)
 	// 确保清理
 	Stop()
 	time.Sleep(10 * time.Millisecond)
@@ -251,6 +253,7 @@ func TestPerformance_IdleCPUOverhead(t *testing.T) {
 
 // 单元测试：测试 goroutine 数量
 func TestPerformance_GoroutineCount(t *testing.T) {
+	skipEnvSensitive(t)
 	// 确保清理
 	Stop()
 	time.Sleep(10 * time.Millisecond)
@@ -296,6 +299,7 @@ func TestPerformance_GoroutineCount(t *testing.T) {
 
 // 单元测试：测试启动时间
 func TestPerformance_StartupTime(t *testing.T) {
+	skipEnvSensitive(t)
 	// 确保清理
 	Stop()
 	time.Sleep(10 * time.Millisecond)

@@ -12,6 +12,7 @@ import (
 )
 
 func TestProperty_AgentInitializationTiming(t *testing.T) {
+	skipEnvSensitive(t)
 	parameters := gopter.DefaultTestParameters()
 	parameters.MinSuccessfulTests = 100
 

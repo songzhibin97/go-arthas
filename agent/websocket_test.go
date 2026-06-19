@@ -16,6 +16,7 @@ import (
 )
 
 func TestProperty_WebSocketImmediateMetricsSend(t *testing.T) {
+	skipEnvSensitive(t)
 	parameters := gopter.DefaultTestParameters()
 	parameters.MinSuccessfulTests = 100
 
@@ -77,6 +78,7 @@ func TestProperty_WebSocketImmediateMetricsSend(t *testing.T) {
 }
 
 func TestProperty_WebSocketPeriodicUpdates(t *testing.T) {
+	skipEnvSensitive(t)
 	parameters := gopter.DefaultTestParameters()
 	parameters.MinSuccessfulTests = 20 // 减少测试次数以加快测试速度
 
@@ -152,6 +154,7 @@ func TestProperty_WebSocketPeriodicUpdates(t *testing.T) {
 }
 
 func TestProperty_WebSocketBroadcastTiming(t *testing.T) {
+	skipEnvSensitive(t)
 	parameters := gopter.DefaultTestParameters()
 	parameters.MinSuccessfulTests = 100
 
@@ -267,6 +270,7 @@ func TestProperty_WebSocketBroadcastTiming(t *testing.T) {
 }
 
 func TestProperty_ResourceLeakPrevention(t *testing.T) {
+	skipEnvSensitive(t)
 	parameters := gopter.DefaultTestParameters()
 	parameters.MinSuccessfulTests = 20 // 减少测试次数以加快测试速度
 

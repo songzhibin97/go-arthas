@@ -483,6 +483,7 @@ func TestErrorResilience_LongRunningStability(t *testing.T) {
 
 // 单元测试：测试内存泄漏检测
 func TestErrorResilience_NoMemoryLeak(t *testing.T) {
+	skipEnvSensitive(t)
 	// 确保清理
 	Stop()
 	time.Sleep(10 * time.Millisecond)

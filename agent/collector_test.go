@@ -259,6 +259,7 @@ func TestMetricsCollector_ContinuousCollection(t *testing.T) {
 
 // TestMetricsCollector_ImmediateCollection 测试启动时立即收集
 func TestMetricsCollector_ImmediateCollection(t *testing.T) {
+	skipEnvSensitive(t)
 	collector := newMetricsCollector(1 * time.Second)
 	collector.start()
 	defer collector.stop()

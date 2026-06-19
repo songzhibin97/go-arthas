@@ -16,8 +16,9 @@ func TestGracefulDegradationWithUnavailableFeatures(t *testing.T) {
 
 	// 捕获日志输出
 	var logBuf bytes.Buffer
+	originalLogOutput := log.Writer()
 	log.SetOutput(&logBuf)
-	defer log.SetOutput(nil)
+	defer log.SetOutput(originalLogOutput)
 
 	// 模拟 CPU 统计不可用的情况
 	// 通过设置 lastCPU 为非零时间戳，然后让 getCPUStats 返回零值
@@ -66,8 +67,9 @@ func TestPlatformFeatureDetection(t *testing.T) {
 
 	// 捕获日志输出
 	var logBuf bytes.Buffer
+	originalLogOutput := log.Writer()
 	log.SetOutput(&logBuf)
-	defer log.SetOutput(nil)
+	defer log.SetOutput(originalLogOutput)
 
 	// 初始化 lastCPU
 	collector.lastCPU = collector.getCPUStats()
@@ -141,8 +143,9 @@ func TestAgentStartsWithUnavailableFeatures(t *testing.T) {
 
 	// 捕获日志输出
 	var logBuf bytes.Buffer
+	originalLogOutput := log.Writer()
 	log.SetOutput(&logBuf)
-	defer log.SetOutput(nil)
+	defer log.SetOutput(originalLogOutput)
 
 	// 启动 Agent
 	err := Start(config)
