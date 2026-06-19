@@ -432,3 +432,44 @@ func TestCLI_FlightUnsupported(t *testing.T) {
 		t.Error("expected error when agent returns 501")
 	}
 }
+
+func TestCLI_MethodsWatchRecords(t *testing.T) {
+	var watchCalled string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/trace/methods":
+			json.NewEncoder(w).Encode([]MethodInfo{{ID: "p.F", Enabled: true, Calls: 3}})
+		case "/api/v1/trace/methods/watch":
+			watchCalled = r.URL.Query().Get("id") + ":" + r.URL.Query().Get("on")
+			fmt.Fprint(w, `{"id":"p.F","enabled":true}`)
+		case "/api/v1/trace/methods/records":
+			json.NewEncoder(w).Encode([]TraceRecord{
+				{ID: "p.F", Seq: 1, Args: []TraceArg{{Name: "a", Value: "1"}}, Results: []TraceArg{{Name: "ret0", Value: "2"}}, Panic: "boom"},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	cli := NewCLI(strings.TrimPrefix(server.URL, "http://"))
+
+	methods, err := cli.GetMethods()
+	if err != nil || len(methods) != 1 || methods[0].ID != "p.F" || methods[0].Calls != 3 {
+		t.Fatalf("GetMethods: %v %+v", err, methods)
+	}
+	FormatMethods(methods)
+
+	if err := cli.SetWatch("p.F", true); err != nil {
+		t.Fatalf("SetWatch: %v", err)
+	}
+	if watchCalled != "p.F:true" {
+		t.Errorf("watch endpoint called with %q, want p.F:true", watchCalled)
+	}
+
+	recs, err := cli.GetRecords("p.F")
+	if err != nil || len(recs) != 1 || recs[0].Args[0].Value != "1" || recs[0].Panic != "boom" {
+		t.Fatalf("GetRecords: %v %+v", err, recs)
+	}
+	FormatRecords("p.F", recs)
+}

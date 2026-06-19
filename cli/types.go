@@ -62,3 +62,28 @@ type GoroutineDump struct {
 	Suspected   []GoroutineInfo `json:"suspected_blocked,omitempty"` // 疑似长阻塞
 	Goroutines  []GoroutineInfo `json:"goroutines,omitempty"`        // 全部（按需）
 }
+
+// TraceArg 被捕获的参数或返回值
+type TraceArg struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// TraceRecord 一次方法调用的快照（tt 时间隧道条目）
+type TraceRecord struct {
+	ID       string        `json:"id"`
+	Seq      uint64        `json:"seq"`
+	Start    time.Time     `json:"start"`
+	Duration time.Duration `json:"duration_ns"`
+	Args     []TraceArg    `json:"args,omitempty"`
+	Results  []TraceArg    `json:"results,omitempty"`
+	Panic    string        `json:"panic,omitempty"`
+	Stack    string        `json:"stack,omitempty"`
+}
+
+// MethodInfo 一个可观察方法的状态摘要
+type MethodInfo struct {
+	ID      string `json:"id"`
+	Enabled bool   `json:"enabled"`
+	Calls   uint64 `json:"calls"`
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"time"
 )
@@ -217,4 +218,62 @@ func (c *CLI) SaveTrace(data []byte) (string, error) {
 		return "", fmt.Errorf("failed to save trace to %s: %w", filename, err)
 	}
 	return filename, nil
+}
+
+// GetMethods 列出所有编译期织入并注册的可观察方法
+func (c *CLI) GetMethods() ([]MethodInfo, error) {
+	url := fmt.Sprintf("http://%s/api/v1/trace/methods", c.host)
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch methods from %s: %w", c.host, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var methods []MethodInfo
+	if err := json.NewDecoder(resp.Body).Decode(&methods); err != nil {
+		return nil, fmt.Errorf("failed to decode methods: %w", err)
+	}
+	return methods, nil
+}
+
+// SetWatch 动态开关某方法的 watch
+func (c *CLI) SetWatch(id string, on bool) error {
+	url := fmt.Sprintf("http://%s/api/v1/trace/methods/watch?id=%s&on=%t", c.host, neturl.QueryEscape(id), on)
+	resp, err := c.client.Post(url, "", nil)
+	if err != nil {
+		return fmt.Errorf("failed to set watch on %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// GetRecords 获取某方法的调用记录（tt 时间隧道）
+func (c *CLI) GetRecords(id string) ([]TraceRecord, error) {
+	url := fmt.Sprintf("http://%s/api/v1/trace/methods/records?id=%s", c.host, neturl.QueryEscape(id))
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch records for %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var records []TraceRecord
+	if err := json.NewDecoder(resp.Body).Decode(&records); err != nil {
+		return nil, fmt.Errorf("failed to decode records: %w", err)
+	}
+	return records, nil
 }

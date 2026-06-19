@@ -152,3 +152,44 @@ func FormatGoroutineDump(d *GoroutineDump, showStacks bool) {
 		}
 	}
 }
+
+// FormatMethods 格式化并打印可观察方法列表
+func FormatMethods(ms []MethodInfo) {
+	fmt.Println("=== Watched Methods ===")
+	if len(ms) == 0 {
+		fmt.Println("(none registered; build target with `go-arthas build --targets ...`)")
+		return
+	}
+	for _, m := range ms {
+		state := "off"
+		if m.Enabled {
+			state = "ON"
+		}
+		fmt.Printf("  [%-3s] %-50s calls=%d\n", state, m.ID, m.Calls)
+	}
+}
+
+// FormatRecords 格式化并打印某方法的调用记录（tt）
+func FormatRecords(id string, recs []TraceRecord) {
+	fmt.Printf("=== Records: %s (%d) ===\n", id, len(recs))
+	for _, r := range recs {
+		fmt.Printf("#%d  %s  dur=%v\n", r.Seq, r.Start.Format("15:04:05.000"), r.Duration)
+		if len(r.Args) > 0 {
+			fmt.Printf("    args:    ")
+			for _, a := range r.Args {
+				fmt.Printf("%s=%s ", a.Name, a.Value)
+			}
+			fmt.Println()
+		}
+		if len(r.Results) > 0 {
+			fmt.Printf("    returns: ")
+			for _, a := range r.Results {
+				fmt.Printf("%s=%s ", a.Name, a.Value)
+			}
+			fmt.Println()
+		}
+		if r.Panic != "" {
+			fmt.Printf("    panic:   %s\n", r.Panic)
+		}
+	}
+}
