@@ -10,11 +10,12 @@
     
     <div class="container">
       <ConnectionStatus :connected="connected" />
-      <Dashboard 
-        :metrics="metrics" 
+      <Dashboard
+        :metrics="metrics"
         :systemInfo="systemInfo"
         :connected="connected"
       />
+      <GoroutinePanel />
     </div>
   </div>
 </template>
@@ -23,13 +24,15 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import Dashboard from './components/Dashboard.vue'
 import ConnectionStatus from './components/ConnectionStatus.vue'
+import GoroutinePanel from './components/GoroutinePanel.vue'
 import { connectWebSocket } from './websocket'
 
 export default {
   name: 'App',
   components: {
     Dashboard,
-    ConnectionStatus
+    ConnectionStatus,
+    GoroutinePanel
   },
   setup() {
     const connected = ref(false)
