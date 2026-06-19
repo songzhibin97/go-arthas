@@ -23,6 +23,7 @@ type agent struct {
 	server    *http.Server
 	collector *metricsCollector
 	wsManager *wsManager
+	flightRec *flightRecorderManager
 	running   bool
 	startTime time.Time
 }
@@ -61,6 +62,9 @@ func Start(config Config) error {
 	a.wsManager = newWSManager()
 	a.wsManager.run()
 
+	// 初始化飞行记录器管理器（按需通过 API 启动）
+	a.flightRec = &flightRecorderManager{}
+
 	// 初始化指标收集器（如果启用）
 	if config.EnableMetrics {
 		a.collector = newMetricsCollector(1 * time.Second)
@@ -73,6 +77,12 @@ func Start(config Config) error {
 	// 注册 API 路由
 	mux.HandleFunc("/api/v1/metrics", a.corsMiddleware(a.handleMetrics))
 	mux.HandleFunc("/api/v1/info", a.corsMiddleware(a.handleInfo))
+	mux.HandleFunc("/api/v1/goroutines", a.corsMiddleware(a.handleGoroutines))
+
+	// 注册飞行记录器路由（执行轨迹回放，需 Go 1.25+）
+	mux.HandleFunc("/api/v1/trace/flight/start", a.corsMiddleware(a.handleFlightStart))
+	mux.HandleFunc("/api/v1/trace/flight/snapshot", a.corsMiddleware(a.handleFlightSnapshot))
+	mux.HandleFunc("/api/v1/trace/flight/stop", a.corsMiddleware(a.handleFlightStop))
 
 	// 注册 WebSocket 路由
 	mux.HandleFunc("/ws/metrics", a.handleWebSocket)
@@ -144,6 +154,11 @@ func Stop() error {
 	}
 
 	a := globalAgent
+
+	// 停止飞行记录器（若在运行）
+	if a.flightRec != nil {
+		_ = a.flightRec.stop()
+	}
 
 	// 停止 WebSocket 管理器
 	if a.wsManager != nil {
