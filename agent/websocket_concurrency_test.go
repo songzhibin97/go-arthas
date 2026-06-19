@@ -18,9 +18,9 @@ import (
 // `-race` 下保持干净。若有人移除 writeMu，并发数据写会触发 gorilla 的
 // "concurrent write to websocket connection" panic 或被竞态检测器标记，从而让本测试失败。
 //
-// 关键：本测试**不**调用 skipEnvSensitive —— 它是功能正确性守护，必须在 `-race` 下运行
-// （而那 4 个 TestProperty_WebSocket* 性能测试都被 skipEnvSensitive 在 -race 下跳过，
-// 等于并发写修复在竞态检测器下没有任何护栏）。
+// 关键：本测试**不**调用 skipEnvSensitive —— 它是功能正确性守护，必须随常规
+// `go test`/`-race` 一起运行（而那 4 个 TestProperty_WebSocket* 性能测试默认跳过、
+// 仅 ARTHAS_PERF_TESTS=1 时运行，等于并发写修复在竞态检测器下没有任何护栏）。
 func TestWebSocket_ConcurrentWritesSerialized(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverConnCh := make(chan *websocket.Conn, 1)

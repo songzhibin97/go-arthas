@@ -529,8 +529,10 @@ func TestErrorResilience_NoMemoryLeak(t *testing.T) {
 	var m2 runtime.MemStats
 	runtime.ReadMemStats(&m2)
 
-	// 计算内存增长
-	memGrowth := m2.Alloc - m1.Alloc
+	// 计算内存增长。m2.Alloc 可能小于 m1.Alloc（agent 停止 + GC 后内存反而下降，
+	// 正是"无泄漏"的健康情况）。两者都是 uint64，直接相减会下溢成 ~2^64，误把内存
+	// 下降报成天文数字的"泄漏"。用有符号差值，内存下降即视为 0 增长。
+	memGrowth := int64(m2.Alloc) - int64(m1.Alloc)
 
 	// 允许一定的内存增长（小于 10MB）
 	if memGrowth > 10*1024*1024 {
