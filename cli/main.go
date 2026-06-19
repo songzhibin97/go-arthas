@@ -27,6 +27,9 @@ func Run(args []string) int {
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
+	case "version", "-v", "--version":
+		printVersion()
+		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
@@ -49,6 +52,7 @@ func printUsage() {
 	fmt.Println("  metrics [--host <host:port>]  Display current runtime metrics")
 	fmt.Println("  info [--host <host:port>]     Display system information")
 	fmt.Println("  profile <type> [options]      Capture performance profile")
+	fmt.Println("  version                       Show version information")
 	fmt.Println()
 	fmt.Println("Profile types:")
 	fmt.Println("  cpu       CPU profile (requires --duration)")
