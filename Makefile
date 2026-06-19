@@ -1,4 +1,4 @@
-.PHONY: all build build-cli build-web test test-unit test-property test-race coverage clean install help
+.PHONY: all build build-cli build-web test test-unit test-property test-race test-perf coverage clean install help
 
 # 默认目标
 all: build
@@ -10,7 +10,7 @@ build: build-cli build-web
 # 构建 CLI 工具
 build-cli:
 	@echo "构建 CLI 工具..."
-	@cd cli && go build -o ../bin/go-arthas -ldflags="-s -w" ./main.go
+	@go build -o bin/go-arthas -ldflags="-s -w" ./cmd/go-arthas
 	@echo "✓ CLI 工具构建完成: bin/go-arthas"
 
 # 构建 Web Console
@@ -23,20 +23,25 @@ build-web:
 test: test-unit test-property
 	@echo "✓ 所有测试通过"
 
-# 运行单元测试
+# 运行单元测试（-short 跳过环境敏感的性能/资源基准，保证门禁稳定）
 test-unit:
 	@echo "运行单元测试..."
-	@go test -v ./...
+	@go test -short -v ./...
 
-# 运行属性测试
+# 运行属性测试（-short 跳过环境敏感基准）
 test-property:
 	@echo "运行属性测试..."
-	@go test -v -run TestProperty ./...
+	@go test -short -v -run TestProperty ./...
 
-# 运行竞态检测
+# 运行竞态检测（环境敏感基准已自动跳过）
 test-race:
 	@echo "运行竞态检测..."
 	@go test -race ./...
+
+# 运行性能/资源基准（环境敏感，非 CI 门禁；建议在空闲机器上单独运行）
+test-perf:
+	@echo "运行性能/资源基准（结果依赖运行环境，非 CI 门禁）..."
+	@go test -v -run 'TestPerformance|TestProperty_PerformanceOverhead' ./...
 
 # 生成代码覆盖率报告
 coverage:
@@ -99,6 +104,7 @@ help:
 	@echo "  make test-unit     - 运行单元测试"
 	@echo "  make test-property - 运行属性测试"
 	@echo "  make test-race     - 运行竞态检测"
+	@echo "  make test-perf     - 运行性能/资源基准（环境敏感，非门禁）"
 	@echo "  make coverage      - 生成代码覆盖率报告"
 	@echo "  make clean         - 清理构建产物"
 	@echo "  make install       - 安装 CLI 工具到系统"
