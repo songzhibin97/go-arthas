@@ -24,6 +24,10 @@ func Run(args []string) int {
 		return runInfo(args[1:])
 	case "profile":
 		return runProfile(args[1:])
+	case "thread":
+		return runThread(args[1:])
+	case "flight":
+		return runFlight(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -52,6 +56,8 @@ func printUsage() {
 	fmt.Println("  metrics [--host <host:port>]  Display current runtime metrics")
 	fmt.Println("  info [--host <host:port>]     Display system information")
 	fmt.Println("  profile <type> [options]      Capture performance profile")
+	fmt.Println("  thread [options]              Dump goroutines (state summary + suspected blocks)")
+	fmt.Println("  flight <start|snapshot|stop>  Execution trace flight recorder (Go 1.25+)")
 	fmt.Println("  version                       Show version information")
 	fmt.Println()
 	fmt.Println("Profile types:")
@@ -186,4 +192,84 @@ func runProfile(args []string) int {
 	fmt.Printf("Profile saved to %s (%s)\n", filename, FormatBytesSize(uint64(len(data))))
 	fmt.Printf("Analyze with: go tool pprof %s\n", filename)
 	return 0
+}
+
+// runThread 执行 thread 命令（goroutine 诊断）
+func runThread(args []string) int {
+	fs := flag.NewFlagSet("thread", flag.ExitOnError)
+	host := fs.String("host", "localhost:8563", "Agent address")
+	full := fs.Bool("full", false, "Print raw full stack trace (all goroutines)")
+	stacks := fs.Bool("stacks", false, "Include per-goroutine stacks in structured output")
+	minWait := fs.Int("min-wait", 1, "Flag goroutines blocked >= N minutes as suspected")
+	fs.Parse(args)
+
+	cli := NewCLI(*host)
+
+	if *full {
+		text, err := cli.GetGoroutinesText()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Print(text)
+		return 0
+	}
+
+	dump, err := cli.GetGoroutines(*stacks, *minWait)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	FormatGoroutineDump(dump, *stacks)
+	return 0
+}
+
+// runFlight 执行 flight 命令（执行轨迹飞行记录器）
+func runFlight(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Error: flight command requires an action (start|snapshot|stop)")
+		fmt.Fprintln(os.Stderr, "Usage: go-arthas flight <start|snapshot|stop> [--host <host:port>]")
+		return 1
+	}
+
+	action := args[0]
+	fs := flag.NewFlagSet("flight", flag.ExitOnError)
+	host := fs.String("host", "localhost:8563", "Agent address")
+	fs.Parse(args[1:])
+
+	cli := NewCLI(*host)
+
+	switch action {
+	case "start":
+		if err := cli.FlightStart(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println("Flight recorder started.")
+		return 0
+	case "stop":
+		if err := cli.FlightStop(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println("Flight recorder stopped.")
+		return 0
+	case "snapshot":
+		data, err := cli.FlightSnapshot()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		filename, err := cli.SaveTrace(data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Printf("Trace saved to %s (%s)\n", filename, FormatBytesSize(uint64(len(data))))
+		fmt.Printf("Analyze with: go tool trace %s\n", filename)
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "Error: unknown flight action '%s' (use start|snapshot|stop)\n", action)
+		return 1
+	}
 }

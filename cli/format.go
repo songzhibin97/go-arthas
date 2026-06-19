@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // FormatMetrics 格式化并打印运行时指标
@@ -91,4 +93,62 @@ func FormatBytesSize(bytes uint64) string {
 // formatBytes 格式化字节数为人类可读格式（内部使用）
 func formatBytes(bytes uint64) string {
 	return FormatBytesSize(bytes)
+}
+
+// FormatGoroutineDump 格式化并打印 goroutine 转储（Arthas thread 等价）
+func FormatGoroutineDump(d *GoroutineDump, showStacks bool) {
+	fmt.Println("=== Goroutine Dump ===")
+	fmt.Println()
+	fmt.Printf("Timestamp: %s\n", d.Timestamp.Format("2006-01-02 15:04:05"))
+	fmt.Printf("Total goroutines: %d\n", d.Total)
+	fmt.Println()
+
+	// 按计数降序打印状态聚合
+	fmt.Println("By state:")
+	type stateCount struct {
+		state string
+		count int
+	}
+	states := make([]stateCount, 0, len(d.StateCounts))
+	for s, c := range d.StateCounts {
+		states = append(states, stateCount{s, c})
+	}
+	sort.Slice(states, func(i, j int) bool {
+		if states[i].count != states[j].count {
+			return states[i].count > states[j].count
+		}
+		return states[i].state < states[j].state
+	})
+	for _, s := range states {
+		fmt.Printf("  %-28s %d\n", s.state, s.count)
+	}
+	fmt.Println()
+
+	// 疑似阻塞
+	if len(d.Suspected) > 0 {
+		fmt.Printf("[!] Suspected blocked goroutines (%d):\n", len(d.Suspected))
+		for _, g := range d.Suspected {
+			fmt.Printf("  goroutine %d [%s, %d minutes]\n", g.ID, g.State, g.WaitMinutes)
+			if g.Stack != "" {
+				for _, line := range strings.Split(g.Stack, "\n") {
+					fmt.Printf("    %s\n", line)
+				}
+			}
+		}
+		fmt.Println()
+	} else {
+		fmt.Println("No suspected blocked goroutines.")
+		fmt.Println()
+	}
+
+	// 全部栈（可选）
+	if showStacks && len(d.Goroutines) > 0 {
+		fmt.Println("All goroutines:")
+		for _, g := range d.Goroutines {
+			if g.Stack != "" {
+				fmt.Println(g.Stack)
+				fmt.Println()
+			}
+		}
+	}
 }
