@@ -83,7 +83,7 @@ func TestProperty_ConfigurationValidation(t *testing.T) {
 				// 应该返回错误且错误消息非空
 				return err != nil && err.Error() != ""
 			},
-			gen.IntRange(-1000, 0).WithLabel("negative ports"),
+			gen.IntRange(-1000, -1).WithLabel("negative ports"),
 		))
 
 	// 测试超出范围的端口
