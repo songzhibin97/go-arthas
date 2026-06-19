@@ -192,9 +192,12 @@ func findReturnOffsetsAMD64(code []byte) ([]int, error) {
 	for pc := 0; pc < len(code); {
 		inst, err := x86asm.Decode(code[pc:], 64)
 		if err != nil || inst.Len == 0 {
-			// 解码失败：跳过一字节继续，避免对数据/对齐填充卡死
-			pc++
-			continue
+			// amd64 是变长指令：解码失败意味着线性反汇编已与真实指令边界**错位**，
+			// 此后的偏移都不可信。对安全攸关的 uprobe-on-RET 绝不能靠 pc++ 猜着继续——
+			// 错位的 RET 会把 uprobe 的 INT3(0xCC) 写进某条真实指令的中部，破坏指令、
+			// 崩溃目标进程（正是当初否决 uretprobe 的同一类崩溃）。宁可报错，让调用方
+			// 知道该函数无法安全分析（通常是手写汇编/ABI0），也不挂可能错位的探针。
+			return nil, fmt.Errorf("decode failed at byte offset %d; cannot reliably locate RET (hand-written assembly or non-code bytes?)", pc)
 		}
 		if inst.Op == x86asm.RET {
 			rets = append(rets, pc)

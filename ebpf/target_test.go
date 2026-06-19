@@ -114,6 +114,27 @@ func TestResolveFuncMissing(t *testing.T) {
 	}
 }
 
+// TestFindReturnOffsetsAMD64 守护 amd64 反汇编加固：干净指令流能定位全部 RET；
+// 一旦解码错位（碰到无法解码的字节）必须报错，绝不 pc++ 猜着继续——错位的偏移会让
+// uprobe 落在指令中部、崩溃目标进程。
+func TestFindReturnOffsetsAMD64(t *testing.T) {
+	// NOP, RET, NOP, RET —— 期望在 offset 1 和 3 各找到一个 RET
+	clean := []byte{0x90, 0xc3, 0x90, 0xc3}
+	rets, err := findReturnOffsetsAMD64(clean)
+	if err != nil {
+		t.Fatalf("clean stream: unexpected error %v", err)
+	}
+	if len(rets) != 2 || rets[0] != 1 || rets[1] != 3 {
+		t.Fatalf("clean stream: rets=%v, want [1 3]", rets)
+	}
+
+	// 0x06 在 64 位下是非法指令(PUSH ES)，触发解码失败 → 必须报错而非跳过
+	desync := []byte{0x90, 0x06, 0xc3}
+	if _, err := findReturnOffsetsAMD64(desync); err == nil {
+		t.Fatal("desync stream: expected error on undecodable byte, got nil (would silently guess RET offsets)")
+	}
+}
+
 func TestGoMajorMinorParsing(t *testing.T) {
 	cases := map[string]int{
 		"go1.25.0": 125,

@@ -40,6 +40,15 @@ type linuxAttacher struct {
 // Attach 加载 eBPF 程序并对目标函数的入口与各 RET 偏移挂 uprobe。
 // 需要 root / CAP_BPF 与支持 bpf cookie 的内核（≥ 5.15）。
 func Attach(opts AttachOptions) (Attacher, error) {
+	// BPF 程序无条件从寄存器(ABIInternal)读入参/返回值。若目标用栈传参
+	// (Go < 1.17 的 amd64 / < 1.18 的 arm64)，寄存器里并非参数，读出的是垃圾。
+	// 与其静默上报错误数据，不如明确拒绝——MVP 仅支持寄存器 ABI。
+	if !opts.RegisterABI {
+		return nil, fmt.Errorf("target uses stack-based calling convention (Go < 1.17 amd64 / < 1.18 arm64); " +
+			"register-based capture is unsupported in this MVP and would report garbage — " +
+			"rebuild the target with a newer Go, or use compile-time instrumentation (go-arthas build)")
+	}
+
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("remove memlock: %w", err)
 	}
