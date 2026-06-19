@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"log"
-	"strings"
 	"testing"
 	"time"
 
@@ -79,45 +78,36 @@ func TestProperty_PlatformGracefulDegradation(t *testing.T) {
 
 	// Agent 应该在平台特性不可用时仍能启动和停止
 	properties.Property("agent starts and stops with unavailable features", prop.ForAll(
-		func(port int) bool {
-			config := Config{
-				Port:          port,
-				EnablePprof:   true,
-				EnableMetrics: true,
-				LogLevel:      "info",
-			}
-
+		func(enablePprof bool) bool {
 			// 捕获日志输出
 			var logBuf bytes.Buffer
 			originalOutput := log.Writer()
 			log.SetOutput(&logBuf)
 			defer log.SetOutput(originalOutput)
 
-			// 启动 Agent
-			err := Start(config)
+			// startOnFreePort 用 OS 空闲端口 + 重试,并在启动前 Stop 清理可能残留的实例。
+			// 取代旧的 gen.IntRange(18600,18700) + "address already in use→return true" 逃生口
+			// ——那个逃生口把端口冲突静默放过(掩盖问题),且全局 Start 在前序测试泄漏 globalAgent
+			// 时会以 "already running"(非逃生口字符串)失败,正是该测试在完整套件里 flaky 的根因。
+			_, err := startOnFreePort(Config{
+				EnablePprof:   enablePprof,
+				EnableMetrics: true,
+				LogLevel:      "info",
+			})
 			if err != nil {
-				// 端口冲突是可以接受的（在并发测试中）
-				if strings.Contains(err.Error(), "address already in use") {
-					return true
-				}
 				t.Logf("FAIL: agent should start even with unavailable features: %v", err)
 				return false
 			}
 
-			// 等待一小段时间
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 
-			// 停止 Agent
-			err = Stop()
-			if err != nil {
+			if err := Stop(); err != nil {
 				t.Logf("FAIL: failed to stop agent: %v", err)
 				return false
 			}
-
-			// 验证：Agent 成功启动和停止
 			return true
 		},
-		gen.IntRange(18600, 18700),
+		gen.Bool(),
 	))
 
 	// 多次收集应该持续成功，即使某些特性不可用

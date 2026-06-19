@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -11,44 +12,42 @@ import (
 	"github.com/leanovate/gopter/prop"
 )
 
-func TestProperty_AgentInitializationTiming(t *testing.T) {
-	skipEnvSensitive(t)
+// TestProperty_AgentStartsAndServes 验证一个**真不变量**:对任意有效配置(pprof/metrics
+// 各种开关组合)agent 都能干净启动并提供服务。
+//
+// 取代旧的 "启动 <1s" 墙钟阈值断言——那是环境敏感的绝对时序,在有负载机器上会偶发 flaky,
+// 且不反映任何真实契约(实测启动 ~200µs,1s 阈值纯属噪声)。这里改为:启动成功 +
+// /api/v1/info(与 metrics/pprof 开关无关、恒可用)返回 200,即"确实在服务"。
+// 起停经 startOnFreePort(OS 空闲端口 + 重试),消除历史的端口冲突 flaky。
+func TestProperty_AgentStartsAndServes(t *testing.T) {
 	parameters := gopter.DefaultTestParameters()
-	parameters.MinSuccessfulTests = 100
+	parameters.MinSuccessfulTests = 24 // 覆盖 pprof×metrics 四种组合多次;真不变量与迭代次数无关
 
 	properties := gopter.NewProperties(parameters)
 
-	properties.Property("agent starts within 1 second for valid configs",
+	properties.Property("agent starts cleanly and serves /api/v1/info for any valid pprof/metrics combo",
 		prop.ForAll(
-			func(port int, enablePprof, enableMetrics bool) bool {
-				// 确保之前的 agent 已停止
-				Stop()
-				time.Sleep(10 * time.Millisecond)
-
-				config := Config{
-					Port:          port,
+			func(enablePprof, enableMetrics bool) bool {
+				port, err := startOnFreePort(Config{
 					EnablePprof:   enablePprof,
 					EnableMetrics: enableMetrics,
-					LogLevel:      "info",
-				}
-
-				start := time.Now()
-				err := Start(config)
-				elapsed := time.Since(start)
-
-				// 清理
-				defer Stop()
-
+					LogLevel:      "error",
+				})
 				if err != nil {
 					return false
 				}
+				defer Stop()
 
-				// 验证启动时间在 1 秒内
-				return elapsed <= 1*time.Second
+				client := &http.Client{Timeout: 3 * time.Second}
+				resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/info", port))
+				if err != nil {
+					return false
+				}
+				defer resp.Body.Close()
+				return resp.StatusCode == http.StatusOK
 			},
-			gen.IntRange(8000, 9000), // 生成有效端口范围
-			gen.Bool(),               // enablePprof
-			gen.Bool(),               // enableMetrics
+			gen.Bool(), // enablePprof
+			gen.Bool(), // enableMetrics
 		))
 
 	properties.TestingRun(t)

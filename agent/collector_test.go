@@ -257,25 +257,26 @@ func TestMetricsCollector_ContinuousCollection(t *testing.T) {
 	}
 }
 
-// TestMetricsCollector_ImmediateCollection 测试启动时立即收集
+// TestMetricsCollector_ImmediateCollection 验证真不变量:collector 启动后会"立即"(异步)
+// 采集首批指标,而非等到第一个 ticker。
+//
+// 取代旧的 "时间戳 <100ms" 绝对时延断言——采集 goroutine 在有负载机器上可能 >100ms 才被
+// 调度,导致误判。这里用一个**远大于轮询窗口的 ticker 间隔**(10s),再轮询 2s 内是否拿到
+// 指标:若拿到,只可能来自启动时的立即采集(第一个 tick 还在 10s 之后),从而既可靠又能
+// 真正区分"立即采集"与"首次 tick"。
 func TestMetricsCollector_ImmediateCollection(t *testing.T) {
-	skipEnvSensitive(t)
-	collector := newMetricsCollector(1 * time.Second)
+	collector := newMetricsCollector(10 * time.Second)
 	collector.start()
 	defer collector.stop()
 
-	// 立即检查（不等待 ticker）
-	time.Sleep(10 * time.Millisecond)
-
-	metrics := collector.GetMetrics()
-	if metrics == nil {
-		t.Fatal("Expected immediate collection on start")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if collector.GetMetrics() != nil {
+			return // 远早于 10s tick 就拿到 → 证明是启动时的立即采集
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-
-	// 验证时间戳接近当前时间
-	if time.Since(metrics.Timestamp) > 100*time.Millisecond {
-		t.Error("Expected metrics to be collected immediately on start")
-	}
+	t.Fatal("collector did not perform immediate collection before the first tick")
 }
 
 // TestMetricsCollector_NoGoroutineLeak 测试没有 goroutine 泄漏

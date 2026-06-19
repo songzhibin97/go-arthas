@@ -42,7 +42,7 @@ test-race:
 # 这些测试默认跳过，需 ARTHAS_PERF_TESTS=1 显式开启（见 racehelp_test.go）。
 test-perf:
 	@echo "运行性能/资源基准（结果依赖运行环境，非 CI 门禁）..."
-	@ARTHAS_PERF_TESTS=1 go test -v -run 'TestPerformance|TestProperty_PerformanceOverhead' ./...
+	@ARTHAS_PERF_TESTS=1 go test -v -run 'TestPerformance' ./...
 
 # 生成代码覆盖率报告
 coverage:

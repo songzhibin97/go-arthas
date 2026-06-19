@@ -483,24 +483,18 @@ func TestErrorResilience_LongRunningStability(t *testing.T) {
 
 // 单元测试：测试内存泄漏检测
 func TestErrorResilience_NoMemoryLeak(t *testing.T) {
-	skipEnvSensitive(t)
-	// 确保清理
-	Stop()
-	time.Sleep(10 * time.Millisecond)
-
-	// 记录初始内存
+	// 清理可能残留的实例后再取内存基线
+	_ = Stop()
 	runtime.GC()
 	var m1 runtime.MemStats
 	runtime.ReadMemStats(&m1)
 
-	config := Config{
-		Port:          8910, // 使用独立端口避免与其他测试冲突
+	// 在 OS 空闲端口启动,消除历史固定端口(8910 落在其它测试端口区间内)的冲突 flaky
+	port, err := startOnFreePort(Config{
 		EnablePprof:   true,
 		EnableMetrics: true,
 		LogLevel:      "error",
-	}
-
-	err := Start(config)
+	})
 	if err != nil {
 		t.Fatalf("Failed to start agent: %v", err)
 	}
@@ -510,8 +504,9 @@ func TestErrorResilience_NoMemoryLeak(t *testing.T) {
 
 	// 发送一些请求
 	client := &http.Client{Timeout: 1 * time.Second}
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/metrics", port)
 	for i := 0; i < 100; i++ {
-		resp, err := client.Get("http://localhost:8910/api/v1/metrics")
+		resp, err := client.Get(url)
 		if err == nil {
 			resp.Body.Close()
 		}

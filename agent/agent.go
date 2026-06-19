@@ -176,16 +176,22 @@ func Stop() error {
 	}
 
 	// 停止 HTTP 服务器
+	var shutdownErr error
 	if a.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := a.server.Shutdown(ctx); err != nil {
-			return fmt.Errorf("failed to shutdown HTTP server: %w", err)
-		}
+		shutdownErr = a.server.Shutdown(ctx)
+		cancel()
 	}
 
+	// 无论 Shutdown 是否超时,都把单例视为已停止:Shutdown 会立即关闭监听 socket,
+	// agent 已不再可用。否则 running 残留为 true 会让后续 Start 报 "already running",
+	// 在测试套件里造成跨用例级联失败。错误仍如实返回。
 	a.running = false
 	globalAgent = nil
+
+	if shutdownErr != nil {
+		return fmt.Errorf("failed to shutdown HTTP server: %w", shutdownErr)
+	}
 
 	log.Printf("[INFO] Agent stopped")
 

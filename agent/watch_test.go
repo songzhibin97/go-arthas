@@ -2,27 +2,32 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/songzhibin97/go-arthas/arthastrace"
 )
 
+// traceTestSeq 为每次运行生成唯一方法 id。arthastrace 注册表是全局/包级的,跨 -count
+// 迭代会累积调用计数与 tt 记录;固定 id 在重复运行时会因累积而 Calls!=1 / 多条 record 失败
+// (count=1 的常规 CI 不受影响,但重复跑/压测会暴露)。唯一 id 让每次运行用独立注册表项。
+var traceTestSeq atomic.Uint64
+
 func TestTraceMethodsControlPlane(t *testing.T) {
-	Stop()
-	time.Sleep(10 * time.Millisecond)
-	if err := Start(Config{Port: 9720, EnableMetrics: false, LogLevel: "error"}); err != nil {
+	port, err := startOnFreePort(Config{EnableMetrics: false, LogLevel: "error"})
+	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer Stop()
-	time.Sleep(100 * time.Millisecond)
 
-	const id = "agenttest.Foo"
+	id := fmt.Sprintf("agenttest.Foo.%d", traceTestSeq.Add(1))
 	arthastrace.Register(id)
 
 	client := &http.Client{Timeout: 3 * time.Second}
-	base := "http://localhost:9720/api/v1/trace/methods"
+	base := fmt.Sprintf("http://127.0.0.1:%d/api/v1/trace/methods", port)
 
 	// 开启 watch
 	resp, err := client.Post(base+"/watch?id="+id+"&on=true", "", nil)
