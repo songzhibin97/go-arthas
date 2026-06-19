@@ -120,6 +120,9 @@ func Start(config Config) error {
 	// 尝试启动 HTTP 服务器
 	listener, err := net.Listen("tcp", a.server.Addr)
 	if err != nil {
+		// wsManager.run() 已在上面启动了后台 goroutine;监听失败时若直接返回会泄漏它。
+		// 先停掉再返回(collector 此时尚未 start,无需处理)。
+		a.wsManager.stop()
 		return fmt.Errorf("failed to start HTTP server: %w", err)
 	}
 

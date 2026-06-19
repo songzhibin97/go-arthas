@@ -58,9 +58,7 @@ func TestProperty_PerformanceOverhead(t *testing.T) {
 
 // 单元测试：测试 CPU 开销（手动测试，不适合自动化）
 func TestPerformance_CPUOverhead(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping CPU overhead test in short mode")
-	}
+	skipEnvSensitive(t) // 绝对性能基准:仅 ARTHAS_PERF_TESTS=1 运行
 
 	// 确保清理
 	Stop()
@@ -144,9 +142,7 @@ func TestPerformance_MemoryOverhead(t *testing.T) {
 
 // 单元测试：测试空闲 CPU 开销
 func TestPerformance_IdleCPUOverhead(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping idle CPU overhead test in short mode")
-	}
+	skipEnvSensitive(t) // 断言绝对 CPU 阈值(env-sensitive):仅 ARTHAS_PERF_TESTS=1 运行
 
 	// 确保清理
 	Stop()
@@ -344,9 +340,7 @@ func BenchmarkGetMetricsConcurrent(b *testing.B) {
 
 // 单元测试：测试长时间运行的内存稳定性
 func TestPerformance_LongRunningMemoryStability(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping long-running test in short mode")
-	}
+	skipEnvSensitive(t) // 断言绝对内存增长 + 30s 长跑(env-sensitive):仅 ARTHAS_PERF_TESTS=1 运行
 
 	// 确保清理
 	Stop()

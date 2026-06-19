@@ -15,10 +15,12 @@ import (
 // TestWebSocket_NewClientReceivesMetrics 验证**真不变量**:每个新连接的 WebSocket 客户端
 // 都会被主动推送一帧有效的初始 metrics(handleConnection 的初始发送)。
 //
-// 取代旧的 "首消息 <100ms" 墙钟阈值 property——那个阈值在有负载机器上偶发 flaky,且其
-// "Goroutines>0" 还隐含依赖 collector 已异步采到首批数据(固定 200ms sleep 在负载下可能
-// 不够,导致误判)。这里改为:先 waitMetrics 确保 collector 就绪,再对多个新连接逐一断言
-// "确实收到一帧带数据的 metrics"(宽松超时,只验证"收到"而非"多快收到")。
+// 取代旧的 "首消息 <100ms" 墙钟阈值 property——旧版真正 flaky 的根因是 gen.IntRange(9000,…)
+// 撞本机 OrbStack 常驻的 :9000 而 Start 失败(已用 startOnFreePort 修复),而非首帧时延本身
+// (实测初始推送 ~µs)。这里先 waitMetrics 确保 collector 就绪,再对多个新连接断言"收到一帧
+// 带数据的 metrics",且首帧死线 500ms:初始推送在 handleConnection 中**同步**发生(~µs,
+// 约 1000× 余量不会 flaky),且 500ms 远低于 1s 的周期广播间隔,从而对"连接即推送初始帧"
+// 这条路径仍有守护(注:周期广播可能恰好抢先,故非 100% 隔离,但已是可靠的及时性检查)。
 func TestWebSocket_NewClientReceivesMetrics(t *testing.T) {
 	port, err := startOnFreePort(Config{EnableMetrics: true, LogLevel: "error"})
 	if err != nil {
@@ -35,7 +37,8 @@ func TestWebSocket_NewClientReceivesMetrics(t *testing.T) {
 		if err != nil {
 			t.Fatalf("dial #%d: %v", i, err)
 		}
-		conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // 宽松:断言"收到",不卡墙钟阈值
+		// 首帧应来自连接时的即时推送(~µs),500ms 死线既不 flaky 又守护"及时初始推送"路径
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 		var m Metrics
 		err = conn.ReadJSON(&m)
 		conn.Close()
