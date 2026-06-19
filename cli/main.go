@@ -6,7 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/songzhibin97/go-arthas/ebpf"
 )
 
 // Run 运行 CLI 应用
@@ -37,6 +41,8 @@ func Run(args []string) int {
 		return runWatch(args[1:])
 	case "build":
 		return runBuild(args[1:])
+	case "attach":
+		return runAttach(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -70,6 +76,7 @@ func printUsage() {
 	fmt.Println("  methods [--host]              List compile-time watched methods")
 	fmt.Println("  watch <id> [--off|--records]  Toggle or inspect a watched method")
 	fmt.Println("  build --targets <ids> [...]   Build with compile-time watch instrumentation")
+	fmt.Println("  attach <pid> --func <name>    eBPF zero-restart attach (Linux, root)")
 	fmt.Println("  version                       Show version information")
 	fmt.Println()
 	fmt.Println("Profile types:")
@@ -405,4 +412,99 @@ func runBuild(args []string) int {
 	fmt.Println("Reminder: the target binary must import the arthastrace package")
 	fmt.Println("(pulled in automatically when you import the go-arthas agent).")
 	return 0
+}
+
+// multiFlag 支持可重复的 --func 标志
+type multiFlag []string
+
+func (m *multiFlag) String() string  { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error {
+	*m = append(*m, v)
+	return nil
+}
+
+// runAttach 执行 attach 命令：用 eBPF uprobe 零重启观察运行中 Go 进程的函数（Linux/root）
+func runAttach(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Error: attach requires a pid")
+		fmt.Fprintln(os.Stderr, "Usage: go-arthas attach <pid> --func <name> [--func ...] [--duration 30s]")
+		return 1
+	}
+	pid, err := strconv.Atoi(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: invalid pid %q: %v\n", args[0], err)
+		return 1
+	}
+
+	fs := flag.NewFlagSet("attach", flag.ExitOnError)
+	var funcs multiFlag
+	fs.Var(&funcs, "func", "function symbol to watch (repeatable), e.g. main.handler")
+	binPath := fs.String("bin", "", "target binary path (default /proc/<pid>/exe)")
+	duration := fs.Duration("duration", 30*time.Second, "how long to observe")
+	list := fs.String("list", "", "list functions whose symbol contains this substring, then exit")
+	fs.Parse(args[1:])
+
+	path := *binPath
+	if path == "" {
+		path = fmt.Sprintf("/proc/%d/exe", pid)
+	}
+
+	tb, err := ebpf.OpenTarget(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	defer tb.Close()
+
+	if *list != "" {
+		for _, fn := range tb.ListFuncs(*list) {
+			fmt.Println(fn)
+		}
+		return 0
+	}
+
+	if len(funcs) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: at least one --func is required (or use --list <substr>)")
+		return 1
+	}
+
+	var targets []*ebpf.FuncTarget
+	for _, fn := range funcs {
+		ft, err := tb.ResolveFunc(fn)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		targets = append(targets, ft)
+		fmt.Printf("resolved %s: entry=%#x size=%d rets=%d\n", ft.Name, ft.EntryAddr, ft.Size, len(ft.ReturnOffs))
+	}
+
+	att, err := ebpf.Attach(ebpf.AttachOptions{
+		BinaryPath:  path,
+		PID:         pid,
+		Targets:     targets,
+		RegisterABI: tb.UsesRegisterABI(),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: attach failed: %v\n", err)
+		return 1
+	}
+	defer att.Close()
+
+	fmt.Printf("attached; observing %d func(s) for %v (Go %s, register-ABI=%v)\n",
+		len(targets), *duration, tb.GoVersion, tb.UsesRegisterABI())
+
+	timer := time.After(*duration)
+	for {
+		select {
+		case ev, ok := <-att.Events():
+			if !ok {
+				return 0
+			}
+			fmt.Printf("[%-5s] %-40s pid=%d regs=%v\n", ev.Kind, ev.Func, ev.PID, ev.Regs)
+		case <-timer:
+			fmt.Println("observation window elapsed")
+			return 0
+		}
+	}
 }
