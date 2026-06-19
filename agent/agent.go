@@ -84,6 +84,11 @@ func Start(config Config) error {
 	mux.HandleFunc("/api/v1/trace/flight/snapshot", a.corsMiddleware(a.handleFlightSnapshot))
 	mux.HandleFunc("/api/v1/trace/flight/stop", a.corsMiddleware(a.handleFlightStop))
 
+	// 注册方法级 watch/trace 控制面（编译期织入，路线 B）
+	mux.HandleFunc("/api/v1/trace/methods", a.corsMiddleware(a.handleTraceMethods))
+	mux.HandleFunc("/api/v1/trace/methods/watch", a.corsMiddleware(a.handleTraceWatch))
+	mux.HandleFunc("/api/v1/trace/methods/records", a.corsMiddleware(a.handleTraceRecords))
+
 	// 注册 WebSocket 路由
 	mux.HandleFunc("/ws/metrics", a.handleWebSocket)
 
