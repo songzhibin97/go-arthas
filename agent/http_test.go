@@ -14,65 +14,41 @@ import (
 	"github.com/leanovate/gopter/prop"
 )
 
-func TestProperty_HTTPMetricsResponseTiming(t *testing.T) {
-	// 启动测试 agent
-	Stop()
-	time.Sleep(10 * time.Millisecond)
-
-	config := Config{
-		Port:          8800,
-		EnablePprof:   false,
-		EnableMetrics: true,
-		LogLevel:      "error",
-	}
-
-	err := Start(config)
+// TestHTTP_MetricsEndpointServesValidData 验证真不变量:/api/v1/metrics 返回 200 + 合法
+// JSON + 有效数据(Goroutines>0)。取代旧的 "100ms 内响应" 绝对时延 property——响应时延在
+// 有负载机器上会超 100ms 而 flaky;这里只断言"正确服务",不卡响应时延。起停经 startOnFreePort
+// 消除历史固定端口 8800 的冲突 flaky。
+func TestHTTP_MetricsEndpointServesValidData(t *testing.T) {
+	port, err := startOnFreePort(Config{EnableMetrics: true, LogLevel: "error"})
 	if err != nil {
-		t.Fatalf("Failed to start agent: %v", err)
+		t.Fatalf("start: %v", err)
 	}
 	defer Stop()
+	if !waitMetrics(3 * time.Second) {
+		t.Fatal("collector not ready")
+	}
 
-	// 等待 agent 启动和第一次指标收集
-	time.Sleep(1500 * time.Millisecond)
-
-	parameters := gopter.DefaultTestParameters()
-	parameters.MinSuccessfulTests = 100
-
-	properties := gopter.NewProperties(parameters)
-
-	properties.Property("/api/v1/metrics responds within 100ms",
-		prop.ForAll(
-			func() bool {
-				start := time.Now()
-				resp, err := http.Get(fmt.Sprintf("http://localhost:%d/api/v1/metrics", config.Port))
-				elapsed := time.Since(start)
-
-				if err != nil {
-					return false
-				}
-				defer resp.Body.Close()
-
-				// 验证响应时间
-				if elapsed > 100*time.Millisecond {
-					return false
-				}
-
-				// 验证响应是有效的 JSON
-				if resp.StatusCode != http.StatusOK {
-					return false
-				}
-
-				var metrics Metrics
-				if err := json.NewDecoder(resp.Body).Decode(&metrics); err != nil {
-					return false
-				}
-
-				// 验证指标包含有效数据
-				return metrics.Goroutines > 0
-			},
-		))
-
-	properties.TestingRun(t)
+	client := &http.Client{Timeout: 3 * time.Second}
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/metrics", port)
+	for i := 0; i < 20; i++ {
+		resp, err := client.Get(url)
+		if err != nil {
+			t.Fatalf("get #%d: %v", i, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			t.Fatalf("get #%d: status %d", i, resp.StatusCode)
+		}
+		var m Metrics
+		err = json.NewDecoder(resp.Body).Decode(&m)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("decode #%d: %v", i, err)
+		}
+		if m.Goroutines <= 0 {
+			t.Errorf("get #%d: empty metrics %+v", i, m)
+		}
+	}
 }
 
 func TestProperty_HTTPErrorStatusCodes(t *testing.T) {

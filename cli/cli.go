@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"time"
 )
@@ -123,4 +124,156 @@ func (c *CLI) SaveProfile(profileType string, data []byte) (string, error) {
 	}
 
 	return filename, nil
+}
+
+// GetGoroutines 获取结构化 goroutine 转储
+func (c *CLI) GetGoroutines(stacks bool, minWait int) (*GoroutineDump, error) {
+	url := fmt.Sprintf("http://%s/api/v1/goroutines?min_wait=%d", c.host, minWait)
+	if stacks {
+		url += "&stacks=true"
+	}
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch goroutines from %s: %w", c.host, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var dump GoroutineDump
+	if err := json.NewDecoder(resp.Body).Decode(&dump); err != nil {
+		return nil, fmt.Errorf("failed to decode goroutine dump: %w", err)
+	}
+	return &dump, nil
+}
+
+// GetGoroutinesText 获取原始全栈文本
+func (c *CLI) GetGoroutinesText() (string, error) {
+	url := fmt.Sprintf("http://%s/api/v1/goroutines?format=text", c.host)
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch goroutine stacks from %s: %w", c.host, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read stacks: %w", err)
+	}
+	return string(data), nil
+}
+
+// flightAction 对飞行记录器执行 start/stop 动作
+func (c *CLI) flightAction(action string) error {
+	url := fmt.Sprintf("http://%s/api/v1/trace/flight/%s", c.host, action)
+	resp, err := c.client.Post(url, "", nil)
+	if err != nil {
+		return fmt.Errorf("failed to %s flight recorder: %w", action, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// FlightStart 启动飞行记录器
+func (c *CLI) FlightStart() error { return c.flightAction("start") }
+
+// FlightStop 停止飞行记录器
+func (c *CLI) FlightStop() error { return c.flightAction("stop") }
+
+// FlightSnapshot 下载飞行记录器当前轨迹快照
+func (c *CLI) FlightSnapshot() ([]byte, error) {
+	url := fmt.Sprintf("http://%s/api/v1/trace/flight/snapshot", c.host)
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch flight snapshot from %s: %w", c.host, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// SaveTrace 保存轨迹数据到文件
+func (c *CLI) SaveTrace(data []byte) (string, error) {
+	timestamp := time.Now().Format("20060102_150405")
+	filename := fmt.Sprintf("flight_%s.trace", timestamp)
+
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return "", fmt.Errorf("failed to save trace to %s: %w", filename, err)
+	}
+	return filename, nil
+}
+
+// GetMethods 列出所有编译期织入并注册的可观察方法
+func (c *CLI) GetMethods() ([]MethodInfo, error) {
+	url := fmt.Sprintf("http://%s/api/v1/trace/methods", c.host)
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch methods from %s: %w", c.host, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var methods []MethodInfo
+	if err := json.NewDecoder(resp.Body).Decode(&methods); err != nil {
+		return nil, fmt.Errorf("failed to decode methods: %w", err)
+	}
+	return methods, nil
+}
+
+// SetWatch 动态开关某方法的 watch
+func (c *CLI) SetWatch(id string, on bool) error {
+	url := fmt.Sprintf("http://%s/api/v1/trace/methods/watch?id=%s&on=%t", c.host, neturl.QueryEscape(id), on)
+	resp, err := c.client.Post(url, "", nil)
+	if err != nil {
+		return fmt.Errorf("failed to set watch on %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// GetRecords 获取某方法的调用记录（tt 时间隧道）
+func (c *CLI) GetRecords(id string) ([]TraceRecord, error) {
+	url := fmt.Sprintf("http://%s/api/v1/trace/methods/records?id=%s", c.host, neturl.QueryEscape(id))
+	resp, err := c.client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch records for %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("agent returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var records []TraceRecord
+	if err := json.NewDecoder(resp.Body).Decode(&records); err != nil {
+		return nil, fmt.Errorf("failed to decode records: %w", err)
+	}
+	return records, nil
 }

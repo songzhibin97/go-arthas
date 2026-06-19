@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -94,50 +95,101 @@ func formatBytes(bytes uint64) string {
 	return FormatBytesSize(bytes)
 }
 
-// printTable 打印表格（通用函数）
-func printTable(headers []string, rows [][]string) {
-	if len(rows) == 0 {
-		return
+// FormatGoroutineDump 格式化并打印 goroutine 转储（Arthas thread 等价）
+func FormatGoroutineDump(d *GoroutineDump, showStacks bool) {
+	fmt.Println("=== Goroutine Dump ===")
+	fmt.Println()
+	fmt.Printf("Timestamp: %s\n", d.Timestamp.Format("2006-01-02 15:04:05"))
+	fmt.Printf("Total goroutines: %d\n", d.Total)
+	fmt.Println()
+
+	// 按计数降序打印状态聚合
+	fmt.Println("By state:")
+	type stateCount struct {
+		state string
+		count int
+	}
+	states := make([]stateCount, 0, len(d.StateCounts))
+	for s, c := range d.StateCounts {
+		states = append(states, stateCount{s, c})
+	}
+	sort.Slice(states, func(i, j int) bool {
+		if states[i].count != states[j].count {
+			return states[i].count > states[j].count
+		}
+		return states[i].state < states[j].state
+	})
+	for _, s := range states {
+		fmt.Printf("  %-28s %d\n", s.state, s.count)
+	}
+	fmt.Println()
+
+	// 疑似阻塞
+	if len(d.Suspected) > 0 {
+		fmt.Printf("[!] Suspected blocked goroutines (%d):\n", len(d.Suspected))
+		for _, g := range d.Suspected {
+			fmt.Printf("  goroutine %d [%s, %d minutes]\n", g.ID, g.State, g.WaitMinutes)
+			if g.Stack != "" {
+				for _, line := range strings.Split(g.Stack, "\n") {
+					fmt.Printf("    %s\n", line)
+				}
+			}
+		}
+		fmt.Println()
+	} else {
+		fmt.Println("No suspected blocked goroutines.")
+		fmt.Println()
 	}
 
-	// 计算每列的最大宽度
-	colWidths := make([]int, len(headers))
-	for i, header := range headers {
-		colWidths[i] = len(header)
-	}
-
-	for _, row := range rows {
-		for i, cell := range row {
-			if i < len(colWidths) && len(cell) > colWidths[i] {
-				colWidths[i] = len(cell)
+	// 全部栈（可选）
+	if showStacks && len(d.Goroutines) > 0 {
+		fmt.Println("All goroutines:")
+		for _, g := range d.Goroutines {
+			if g.Stack != "" {
+				fmt.Println(g.Stack)
+				fmt.Println()
 			}
 		}
 	}
+}
 
-	// 打印表头
-	printRow(headers, colWidths)
-	printSeparator(colWidths)
-
-	// 打印数据行
-	for _, row := range rows {
-		printRow(row, colWidths)
+// FormatMethods 格式化并打印可观察方法列表
+func FormatMethods(ms []MethodInfo) {
+	fmt.Println("=== Watched Methods ===")
+	if len(ms) == 0 {
+		fmt.Println("(none registered; build target with `go-arthas build --targets ...`)")
+		return
+	}
+	for _, m := range ms {
+		state := "off"
+		if m.Enabled {
+			state = "ON"
+		}
+		fmt.Printf("  [%-3s] %-50s calls=%d\n", state, m.ID, m.Calls)
 	}
 }
 
-// printRow 打印表格行
-func printRow(cells []string, widths []int) {
-	for i, cell := range cells {
-		if i < len(widths) {
-			fmt.Printf("%-*s", widths[i]+2, cell)
+// FormatRecords 格式化并打印某方法的调用记录（tt）
+func FormatRecords(id string, recs []TraceRecord) {
+	fmt.Printf("=== Records: %s (%d) ===\n", id, len(recs))
+	for _, r := range recs {
+		fmt.Printf("#%d  %s  dur=%v\n", r.Seq, r.Start.Format("15:04:05.000"), r.Duration)
+		if len(r.Args) > 0 {
+			fmt.Printf("    args:    ")
+			for _, a := range r.Args {
+				fmt.Printf("%s=%s ", a.Name, a.Value)
+			}
+			fmt.Println()
+		}
+		if len(r.Results) > 0 {
+			fmt.Printf("    returns: ")
+			for _, a := range r.Results {
+				fmt.Printf("%s=%s ", a.Name, a.Value)
+			}
+			fmt.Println()
+		}
+		if r.Panic != "" {
+			fmt.Printf("    panic:   %s\n", r.Panic)
 		}
 	}
-	fmt.Println()
-}
-
-// printSeparator 打印表格分隔线
-func printSeparator(widths []int) {
-	for _, width := range widths {
-		fmt.Print(strings.Repeat("-", width+2))
-	}
-	fmt.Println()
 }

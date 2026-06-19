@@ -45,3 +45,45 @@ type SystemInfo struct {
 	StartTime time.Time `json:"start_time"` // 启动时间
 	Uptime    string    `json:"uptime"`     // 运行时长
 }
+
+// GoroutineInfo 单个 goroutine 信息
+type GoroutineInfo struct {
+	ID          int    `json:"id"`                     // goroutine 编号
+	State       string `json:"state"`                  // 规范化状态
+	WaitMinutes int    `json:"wait_minutes,omitempty"` // 阻塞时长（分钟）
+	Stack       string `json:"stack,omitempty"`        // 完整调用栈
+}
+
+// GoroutineDump goroutine 转储与聚合
+type GoroutineDump struct {
+	Timestamp   time.Time       `json:"timestamp"`                   // 抓取时间
+	Total       int             `json:"total"`                       // 总数
+	StateCounts map[string]int  `json:"state_counts"`                // 按状态聚合
+	Suspected   []GoroutineInfo `json:"suspected_blocked,omitempty"` // 疑似长阻塞
+	Goroutines  []GoroutineInfo `json:"goroutines,omitempty"`        // 全部（按需）
+}
+
+// TraceArg 被捕获的参数或返回值
+type TraceArg struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// TraceRecord 一次方法调用的快照（tt 时间隧道条目）
+type TraceRecord struct {
+	ID       string        `json:"id"`
+	Seq      uint64        `json:"seq"`
+	Start    time.Time     `json:"start"`
+	Duration time.Duration `json:"duration_ns"`
+	Args     []TraceArg    `json:"args,omitempty"`
+	Results  []TraceArg    `json:"results,omitempty"`
+	Panic    string        `json:"panic,omitempty"`
+	Stack    string        `json:"stack,omitempty"`
+}
+
+// MethodInfo 一个可观察方法的状态摘要
+type MethodInfo struct {
+	ID      string `json:"id"`
+	Enabled bool   `json:"enabled"`
+	Calls   uint64 `json:"calls"`
+}

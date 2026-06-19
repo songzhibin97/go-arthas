@@ -28,6 +28,7 @@ PLATFORMS=(
     "darwin/amd64"
     "darwin/arm64"
     "windows/amd64"
+    "windows/arm64"
 )
 
 echo -e "${GREEN}Go-Arthas 发布构建${NC}"
@@ -55,16 +56,16 @@ for platform in "${PLATFORMS[@]}"; do
     
     echo "  构建 $GOOS/$GOARCH..."
     
-    cd cli
     GOOS=$GOOS GOARCH=$GOARCH go build \
-        -ldflags="-s -w -X main.Version=$VERSION -X main.BuildTime=$BUILD_TIME -X main.GitCommit=$GIT_COMMIT" \
-        -o "../${OUTPUT_DIR}/${output_name}" \
-        ./main.go
-    cd ..
-    
-    # 计算校验和
-    if [ "$GOOS" = "darwin" ] || [ "$GOOS" = "linux" ]; then
+        -ldflags="-s -w -X github.com/songzhibin97/go-arthas/cli.Version=$VERSION -X github.com/songzhibin97/go-arthas/cli.BuildTime=$BUILD_TIME -X github.com/songzhibin97/go-arthas/cli.GitCommit=$GIT_COMMIT" \
+        -o "${OUTPUT_DIR}/${output_name}" \
+        ./cmd/go-arthas
+
+    # 计算校验和（所有平台）
+    if command -v shasum &> /dev/null; then
         shasum -a 256 "${OUTPUT_DIR}/${output_name}" > "${OUTPUT_DIR}/${output_name}.sha256"
+    elif command -v sha256sum &> /dev/null; then
+        sha256sum "${OUTPUT_DIR}/${output_name}" > "${OUTPUT_DIR}/${output_name}.sha256"
     fi
     
     echo -e "  ${GREEN}✓${NC} $output_name"
@@ -112,6 +113,7 @@ Git 提交: ${GIT_COMMIT}
 - macOS (amd64): \`go-arthas-darwin-amd64\`
 - macOS (arm64): \`go-arthas-darwin-arm64\`
 - Windows (amd64): \`go-arthas-windows-amd64.exe\`
+- Windows (arm64): \`go-arthas-windows-arm64.exe\`
 
 ### Web Console
 
@@ -123,7 +125,7 @@ Git 提交: ${GIT_COMMIT}
 
 \`\`\`bash
 # 下载二进制文件
-wget https://github.com/your-org/go-arthas/releases/download/${VERSION}/go-arthas-linux-amd64
+wget https://github.com/songzhibin97/go-arthas/releases/download/${VERSION}/go-arthas-linux-amd64
 
 # 添加执行权限
 chmod +x go-arthas-linux-amd64
@@ -172,8 +174,8 @@ shasum -a 256 -c checksums.txt
 
 ## 支持
 
-- 问题反馈: https://github.com/your-org/go-arthas/issues
-- 讨论: https://github.com/your-org/go-arthas/discussions
+- 问题反馈: https://github.com/songzhibin97/go-arthas/issues
+- 讨论: https://github.com/songzhibin97/go-arthas/discussions
 EOF
 
 # 列出构建产物

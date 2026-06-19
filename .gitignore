@@ -45,3 +45,9 @@ web/package-lock.json
 # Temporary files
 tmp/
 temp/
+
+# eBPF generated artifacts (produced by `go generate` / scripts/ebpf-setup.sh on the target host)
+ebpf/*_bpfel.go
+ebpf/*_bpfeb.go
+ebpf/*.o
+ebpf/bpf/headers/vmlinux.h

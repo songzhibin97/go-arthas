@@ -316,3 +316,160 @@ func TestRun_Help(t *testing.T) {
 		t.Error("Expected zero exit code for help command")
 	}
 }
+
+func TestCLI_GetGoroutines(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("min_wait") != "1" {
+			t.Errorf("expected min_wait=1, got %q", r.URL.Query().Get("min_wait"))
+		}
+		dump := GoroutineDump{
+			Timestamp:   time.Now(),
+			Total:       3,
+			StateCounts: map[string]int{"running": 1, "chan receive": 2},
+			Suspected: []GoroutineInfo{
+				{ID: 5, State: "chan receive", WaitMinutes: 7, Stack: "goroutine 5 [chan receive, 7 minutes]:"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(dump)
+	}))
+	defer server.Close()
+
+	cli := NewCLI(strings.TrimPrefix(server.URL, "http://"))
+	dump, err := cli.GetGoroutines(false, 1)
+	if err != nil {
+		t.Fatalf("GetGoroutines: %v", err)
+	}
+	if dump.Total != 3 {
+		t.Errorf("Total=%d want 3", dump.Total)
+	}
+	if len(dump.Suspected) != 1 || dump.Suspected[0].WaitMinutes != 7 {
+		t.Errorf("suspected mismatch: %+v", dump.Suspected)
+	}
+	// 验证不会 panic 地格式化
+	FormatGoroutineDump(dump, false)
+}
+
+func TestCLI_GetGoroutinesText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("format") != "text" {
+			t.Errorf("expected format=text, got %q", r.URL.Query().Get("format"))
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "goroutine 1 [running]:\nmain.main()")
+	}))
+	defer server.Close()
+
+	cli := NewCLI(strings.TrimPrefix(server.URL, "http://"))
+	text, err := cli.GetGoroutinesText()
+	if err != nil {
+		t.Fatalf("GetGoroutinesText: %v", err)
+	}
+	if !strings.Contains(text, "goroutine 1") {
+		t.Errorf("unexpected text: %q", text)
+	}
+}
+
+func TestCLI_FlightLifecycle(t *testing.T) {
+	var started, stopped bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/trace/flight/start":
+			started = true
+			fmt.Fprint(w, `{"status":"started"}`)
+		case "/api/v1/trace/flight/snapshot":
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Write([]byte("trace-bytes"))
+		case "/api/v1/trace/flight/stop":
+			stopped = true
+			fmt.Fprint(w, `{"status":"stopped"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	cli := NewCLI(strings.TrimPrefix(server.URL, "http://"))
+
+	if err := cli.FlightStart(); err != nil {
+		t.Fatalf("FlightStart: %v", err)
+	}
+	if !started {
+		t.Error("start endpoint not called")
+	}
+
+	data, err := cli.FlightSnapshot()
+	if err != nil {
+		t.Fatalf("FlightSnapshot: %v", err)
+	}
+	if string(data) != "trace-bytes" {
+		t.Errorf("snapshot data=%q", string(data))
+	}
+
+	fn, err := cli.SaveTrace(data)
+	if err != nil {
+		t.Fatalf("SaveTrace: %v", err)
+	}
+	defer os.Remove(fn)
+
+	if err := cli.FlightStop(); err != nil {
+		t.Fatalf("FlightStop: %v", err)
+	}
+	if !stopped {
+		t.Error("stop endpoint not called")
+	}
+}
+
+func TestCLI_FlightUnsupported(t *testing.T) {
+	// 模拟 stub（Go < 1.25）返回 501
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "flight recorder requires Go 1.25+", http.StatusNotImplemented)
+	}))
+	defer server.Close()
+
+	cli := NewCLI(strings.TrimPrefix(server.URL, "http://"))
+	if err := cli.FlightStart(); err == nil {
+		t.Error("expected error when agent returns 501")
+	}
+}
+
+func TestCLI_MethodsWatchRecords(t *testing.T) {
+	var watchCalled string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/trace/methods":
+			json.NewEncoder(w).Encode([]MethodInfo{{ID: "p.F", Enabled: true, Calls: 3}})
+		case "/api/v1/trace/methods/watch":
+			watchCalled = r.URL.Query().Get("id") + ":" + r.URL.Query().Get("on")
+			fmt.Fprint(w, `{"id":"p.F","enabled":true}`)
+		case "/api/v1/trace/methods/records":
+			json.NewEncoder(w).Encode([]TraceRecord{
+				{ID: "p.F", Seq: 1, Args: []TraceArg{{Name: "a", Value: "1"}}, Results: []TraceArg{{Name: "ret0", Value: "2"}}, Panic: "boom"},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	cli := NewCLI(strings.TrimPrefix(server.URL, "http://"))
+
+	methods, err := cli.GetMethods()
+	if err != nil || len(methods) != 1 || methods[0].ID != "p.F" || methods[0].Calls != 3 {
+		t.Fatalf("GetMethods: %v %+v", err, methods)
+	}
+	FormatMethods(methods)
+
+	if err := cli.SetWatch("p.F", true); err != nil {
+		t.Fatalf("SetWatch: %v", err)
+	}
+	if watchCalled != "p.F:true" {
+		t.Errorf("watch endpoint called with %q, want p.F:true", watchCalled)
+	}
+
+	recs, err := cli.GetRecords("p.F")
+	if err != nil || len(recs) != 1 || recs[0].Args[0].Value != "1" || recs[0].Panic != "boom" {
+		t.Fatalf("GetRecords: %v %+v", err, recs)
+	}
+	FormatRecords("p.F", recs)
+}

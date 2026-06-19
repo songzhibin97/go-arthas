@@ -4,6 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/songzhibin97/go-arthas/ebpf"
 )
 
 // Run 运行 CLI 应用
@@ -24,8 +31,23 @@ func Run(args []string) int {
 		return runInfo(args[1:])
 	case "profile":
 		return runProfile(args[1:])
+	case "thread":
+		return runThread(args[1:])
+	case "flight":
+		return runFlight(args[1:])
+	case "methods":
+		return runMethods(args[1:])
+	case "watch":
+		return runWatch(args[1:])
+	case "build":
+		return runBuild(args[1:])
+	case "attach":
+		return runAttach(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
+		return 0
+	case "version", "-v", "--version":
+		printVersion()
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
@@ -38,8 +60,9 @@ func Run(args []string) int {
 func printUsage() {
 	fmt.Println("Go-Arthas CLI - Runtime monitoring and performance analysis tool for Go")
 	fmt.Println()
-	fmt.Println("Note: Go-Arthas focuses on runtime metrics and profiling.")
-	fmt.Println("      For method-level tracing, consider OpenTelemetry or manual instrumentation.")
+	fmt.Println("Note: method-level watch/trace is available via compile-time instrumentation")
+	fmt.Println("      (build) or eBPF zero-restart attach (attach, Linux/root); see docs/BUILD.md")
+	fmt.Println("      and ebpf/README.md.")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  go-arthas <command> [options]")
@@ -49,6 +72,13 @@ func printUsage() {
 	fmt.Println("  metrics [--host <host:port>]  Display current runtime metrics")
 	fmt.Println("  info [--host <host:port>]     Display system information")
 	fmt.Println("  profile <type> [options]      Capture performance profile")
+	fmt.Println("  thread [options]              Dump goroutines (state summary + suspected blocks)")
+	fmt.Println("  flight <start|snapshot|stop>  Execution trace flight recorder (Go 1.25+)")
+	fmt.Println("  methods [--host]              List compile-time watched methods")
+	fmt.Println("  watch <id> [--off|--records]  Toggle or inspect a watched method")
+	fmt.Println("  build --targets <ids> [...]   Build with compile-time watch instrumentation")
+	fmt.Println("  attach <pid> --func <name>    eBPF zero-restart attach (Linux, root)")
+	fmt.Println("  version                       Show version information")
 	fmt.Println()
 	fmt.Println("Profile types:")
 	fmt.Println("  cpu       CPU profile (requires --duration)")
@@ -182,4 +212,302 @@ func runProfile(args []string) int {
 	fmt.Printf("Profile saved to %s (%s)\n", filename, FormatBytesSize(uint64(len(data))))
 	fmt.Printf("Analyze with: go tool pprof %s\n", filename)
 	return 0
+}
+
+// runThread 执行 thread 命令（goroutine 诊断）
+func runThread(args []string) int {
+	fs := flag.NewFlagSet("thread", flag.ExitOnError)
+	host := fs.String("host", "localhost:8563", "Agent address")
+	full := fs.Bool("full", false, "Print raw full stack trace (all goroutines)")
+	stacks := fs.Bool("stacks", false, "Include per-goroutine stacks in structured output")
+	minWait := fs.Int("min-wait", 1, "Flag goroutines blocked >= N minutes as suspected")
+	fs.Parse(args)
+
+	cli := NewCLI(*host)
+
+	if *full {
+		text, err := cli.GetGoroutinesText()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Print(text)
+		return 0
+	}
+
+	dump, err := cli.GetGoroutines(*stacks, *minWait)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	FormatGoroutineDump(dump, *stacks)
+	return 0
+}
+
+// runFlight 执行 flight 命令（执行轨迹飞行记录器）
+func runFlight(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Error: flight command requires an action (start|snapshot|stop)")
+		fmt.Fprintln(os.Stderr, "Usage: go-arthas flight <start|snapshot|stop> [--host <host:port>]")
+		return 1
+	}
+
+	action := args[0]
+	fs := flag.NewFlagSet("flight", flag.ExitOnError)
+	host := fs.String("host", "localhost:8563", "Agent address")
+	fs.Parse(args[1:])
+
+	cli := NewCLI(*host)
+
+	switch action {
+	case "start":
+		if err := cli.FlightStart(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println("Flight recorder started.")
+		return 0
+	case "stop":
+		if err := cli.FlightStop(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Println("Flight recorder stopped.")
+		return 0
+	case "snapshot":
+		data, err := cli.FlightSnapshot()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		filename, err := cli.SaveTrace(data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		fmt.Printf("Trace saved to %s (%s)\n", filename, FormatBytesSize(uint64(len(data))))
+		fmt.Printf("Analyze with: go tool trace %s\n", filename)
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "Error: unknown flight action '%s' (use start|snapshot|stop)\n", action)
+		return 1
+	}
+}
+
+// runMethods 执行 methods 命令：列出可观察方法
+func runMethods(args []string) int {
+	fs := flag.NewFlagSet("methods", flag.ExitOnError)
+	host := fs.String("host", "localhost:8563", "Agent address")
+	fs.Parse(args)
+
+	cli := NewCLI(*host)
+	methods, err := cli.GetMethods()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	FormatMethods(methods)
+	return 0
+}
+
+// runWatch 执行 watch 命令：开关或查看某方法
+func runWatch(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Error: watch requires a method id")
+		fmt.Fprintln(os.Stderr, "Usage: go-arthas watch <id> [--off] [--records] [--host <host:port>]")
+		return 1
+	}
+	id := args[0]
+	fs := flag.NewFlagSet("watch", flag.ExitOnError)
+	host := fs.String("host", "localhost:8563", "Agent address")
+	off := fs.Bool("off", false, "Disable watch instead of enabling")
+	records := fs.Bool("records", false, "Show recorded invocations (time tunnel)")
+	fs.Parse(args[1:])
+
+	cli := NewCLI(*host)
+
+	if *records {
+		recs, err := cli.GetRecords(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		FormatRecords(id, recs)
+		return 0
+	}
+
+	on := !*off
+	if err := cli.SetWatch(id, on); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	fmt.Printf("watch %s -> %v\n", id, on)
+	return 0
+}
+
+// runBuild 执行 build 命令：以编译期 watch 织入构建目标程序
+func runBuild(args []string) int {
+	// 仅提取 --targets，其余参数原样透传给 `go build`（如 -o、./...、-tags 等）
+	var targetList string
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--targets" || a == "-targets":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --targets requires a value (\"pkg.Func,...\")")
+				return 1
+			}
+			targetList = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--targets="):
+			targetList = strings.TrimPrefix(a, "--targets=")
+		case strings.HasPrefix(a, "-targets="):
+			targetList = strings.TrimPrefix(a, "-targets=")
+		default:
+			rest = append(rest, a)
+		}
+	}
+
+	if targetList == "" {
+		fmt.Fprintln(os.Stderr, "Error: build requires --targets \"pkg.Func,...\"")
+		return 1
+	}
+
+	tmpDir, err := os.MkdirTemp("", "arthas-build-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// 1. 构建 toolexec（需当前 module require go-arthas）
+	toolexec := filepath.Join(tmpDir, "arthas-toolexec")
+	if out, err := exec.Command("go", "build", "-o", toolexec, "github.com/songzhibin97/go-arthas/cmd/arthas-toolexec").CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: build toolexec failed: %v\n%s", err, out)
+		return 1
+	}
+
+	// 2. 预编译 arthastrace 获取其归档路径（供 toolexec 注入 importcfg）
+	archiveOut, err := exec.Command("go", "list", "-export", "-f", "{{.Export}}", "github.com/songzhibin97/go-arthas/arthastrace").Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: locate arthastrace archive failed: %v\n", err)
+		return 1
+	}
+	archive := strings.TrimSpace(string(archiveOut))
+	if archive == "" {
+		fmt.Fprintln(os.Stderr, "Error: empty arthastrace archive path")
+		return 1
+	}
+
+	// 3. 带 toolexec 构建
+	buildArgs := append([]string{"build", "-toolexec", toolexec}, rest...)
+	cmd := exec.Command("go", buildArgs...)
+	cmd.Env = append(os.Environ(), "ARTHAS_TARGETS="+targetList, "ARTHAS_ARCHIVE="+archive)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: instrumented build failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Instrumented build complete. Watched: %s\n", targetList)
+	fmt.Println("Reminder: the target binary must import the arthastrace package")
+	fmt.Println("(pulled in automatically when you import the go-arthas agent).")
+	return 0
+}
+
+// multiFlag 支持可重复的 --func 标志
+type multiFlag []string
+
+func (m *multiFlag) String() string { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error {
+	*m = append(*m, v)
+	return nil
+}
+
+// runAttach 执行 attach 命令：用 eBPF uprobe 零重启观察运行中 Go 进程的函数（Linux/root）
+func runAttach(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Error: attach requires a pid")
+		fmt.Fprintln(os.Stderr, "Usage: go-arthas attach <pid> --func <name> [--func ...] [--duration 30s]")
+		return 1
+	}
+	pid, err := strconv.Atoi(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: invalid pid %q: %v\n", args[0], err)
+		return 1
+	}
+
+	fs := flag.NewFlagSet("attach", flag.ExitOnError)
+	var funcs multiFlag
+	fs.Var(&funcs, "func", "function symbol to watch (repeatable), e.g. main.handler")
+	binPath := fs.String("bin", "", "target binary path (default /proc/<pid>/exe)")
+	duration := fs.Duration("duration", 30*time.Second, "how long to observe")
+	list := fs.String("list", "", "list functions whose symbol contains this substring, then exit")
+	fs.Parse(args[1:])
+
+	path := *binPath
+	if path == "" {
+		path = fmt.Sprintf("/proc/%d/exe", pid)
+	}
+
+	tb, err := ebpf.OpenTarget(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	defer tb.Close()
+
+	if *list != "" {
+		for _, fn := range tb.ListFuncs(*list) {
+			fmt.Println(fn)
+		}
+		return 0
+	}
+
+	if len(funcs) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: at least one --func is required (or use --list <substr>)")
+		return 1
+	}
+
+	var targets []*ebpf.FuncTarget
+	for _, fn := range funcs {
+		ft, err := tb.ResolveFunc(fn)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+		targets = append(targets, ft)
+		fmt.Printf("resolved %s: entry=%#x size=%d rets=%d\n", ft.Name, ft.EntryAddr, ft.Size, len(ft.ReturnOffs))
+	}
+
+	att, err := ebpf.Attach(ebpf.AttachOptions{
+		BinaryPath:  path,
+		PID:         pid,
+		Targets:     targets,
+		RegisterABI: tb.UsesRegisterABI(),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: attach failed: %v\n", err)
+		return 1
+	}
+	defer att.Close()
+
+	fmt.Printf("attached; observing %d func(s) for %v (Go %s, register-ABI=%v)\n",
+		len(targets), *duration, tb.GoVersion, tb.UsesRegisterABI())
+
+	timer := time.After(*duration)
+	for {
+		select {
+		case ev, ok := <-att.Events():
+			if !ok {
+				return 0
+			}
+			fmt.Printf("[%-5s] %-40s pid=%d regs=%v\n", ev.Kind, ev.Func, ev.PID, ev.Regs)
+		case <-timer:
+			fmt.Println("observation window elapsed")
+			return 0
+		}
+	}
 }

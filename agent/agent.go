@@ -23,7 +23,7 @@ type agent struct {
 	server    *http.Server
 	collector *metricsCollector
 	wsManager *wsManager
-	mu        sync.Mutex
+	flightRec *flightRecorderManager
 	running   bool
 	startTime time.Time
 }
@@ -62,6 +62,9 @@ func Start(config Config) error {
 	a.wsManager = newWSManager()
 	a.wsManager.run()
 
+	// 初始化飞行记录器管理器（按需通过 API 启动）
+	a.flightRec = &flightRecorderManager{}
+
 	// 初始化指标收集器（如果启用）
 	if config.EnableMetrics {
 		a.collector = newMetricsCollector(1 * time.Second)
@@ -74,6 +77,17 @@ func Start(config Config) error {
 	// 注册 API 路由
 	mux.HandleFunc("/api/v1/metrics", a.corsMiddleware(a.handleMetrics))
 	mux.HandleFunc("/api/v1/info", a.corsMiddleware(a.handleInfo))
+	mux.HandleFunc("/api/v1/goroutines", a.corsMiddleware(a.handleGoroutines))
+
+	// 注册飞行记录器路由（执行轨迹回放，需 Go 1.25+）
+	mux.HandleFunc("/api/v1/trace/flight/start", a.corsMiddleware(a.handleFlightStart))
+	mux.HandleFunc("/api/v1/trace/flight/snapshot", a.corsMiddleware(a.handleFlightSnapshot))
+	mux.HandleFunc("/api/v1/trace/flight/stop", a.corsMiddleware(a.handleFlightStop))
+
+	// 注册方法级 watch/trace 控制面（编译期织入，路线 B）
+	mux.HandleFunc("/api/v1/trace/methods", a.corsMiddleware(a.handleTraceMethods))
+	mux.HandleFunc("/api/v1/trace/methods/watch", a.corsMiddleware(a.handleTraceWatch))
+	mux.HandleFunc("/api/v1/trace/methods/records", a.corsMiddleware(a.handleTraceRecords))
 
 	// 注册 WebSocket 路由
 	mux.HandleFunc("/ws/metrics", a.handleWebSocket)
@@ -106,6 +120,9 @@ func Start(config Config) error {
 	// 尝试启动 HTTP 服务器
 	listener, err := net.Listen("tcp", a.server.Addr)
 	if err != nil {
+		// wsManager.run() 已在上面启动了后台 goroutine;监听失败时若直接返回会泄漏它。
+		// 先停掉再返回(collector 此时尚未 start,无需处理)。
+		a.wsManager.stop()
 		return fmt.Errorf("failed to start HTTP server: %w", err)
 	}
 
@@ -146,6 +163,11 @@ func Stop() error {
 
 	a := globalAgent
 
+	// 停止飞行记录器（若在运行）
+	if a.flightRec != nil {
+		_ = a.flightRec.stop()
+	}
+
 	// 停止 WebSocket 管理器
 	if a.wsManager != nil {
 		a.wsManager.stop()
@@ -157,16 +179,22 @@ func Stop() error {
 	}
 
 	// 停止 HTTP 服务器
+	var shutdownErr error
 	if a.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := a.server.Shutdown(ctx); err != nil {
-			return fmt.Errorf("failed to shutdown HTTP server: %w", err)
-		}
+		shutdownErr = a.server.Shutdown(ctx)
+		cancel()
 	}
 
+	// 无论 Shutdown 是否超时,都把单例视为已停止:Shutdown 会立即关闭监听 socket,
+	// agent 已不再可用。否则 running 残留为 true 会让后续 Start 报 "already running",
+	// 在测试套件里造成跨用例级联失败。错误仍如实返回。
 	a.running = false
 	globalAgent = nil
+
+	if shutdownErr != nil {
+		return fmt.Errorf("failed to shutdown HTTP server: %w", shutdownErr)
+	}
 
 	log.Printf("[INFO] Agent stopped")
 
