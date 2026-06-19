@@ -60,8 +60,9 @@ func Run(args []string) int {
 func printUsage() {
 	fmt.Println("Go-Arthas CLI - Runtime monitoring and performance analysis tool for Go")
 	fmt.Println()
-	fmt.Println("Note: Go-Arthas focuses on runtime metrics and profiling.")
-	fmt.Println("      For method-level tracing, consider OpenTelemetry or manual instrumentation.")
+	fmt.Println("Note: method-level watch/trace is available via compile-time instrumentation")
+	fmt.Println("      (build) or eBPF zero-restart attach (attach, Linux/root); see docs/BUILD.md")
+	fmt.Println("      and ebpf/README.md.")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  go-arthas <command> [options]")
@@ -353,10 +354,12 @@ func runBuild(args []string) int {
 		a := args[i]
 		switch {
 		case a == "--targets" || a == "-targets":
-			if i+1 < len(args) {
-				targetList = args[i+1]
-				i++
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --targets requires a value (\"pkg.Func,...\")")
+				return 1
 			}
+			targetList = args[i+1]
+			i++
 		case strings.HasPrefix(a, "--targets="):
 			targetList = strings.TrimPrefix(a, "--targets=")
 		case strings.HasPrefix(a, "-targets="):
@@ -417,7 +420,7 @@ func runBuild(args []string) int {
 // multiFlag 支持可重复的 --func 标志
 type multiFlag []string
 
-func (m *multiFlag) String() string  { return strings.Join(*m, ",") }
+func (m *multiFlag) String() string { return strings.Join(*m, ",") }
 func (m *multiFlag) Set(v string) error {
 	*m = append(*m, v)
 	return nil

@@ -30,12 +30,16 @@ Go 1.17+（amd64）/ 1.18+（arm64）用寄存器传参（ABIInternal）：amd64
 
 ## 构建与验证
 
-**任意平台（仅静态分析，不含 eBPF 运行时）：**
+**非 Linux 主机（macOS/Windows，仅静态分析，不含 eBPF 运行时）：**
 
 ```bash
-go build ./...        # loader_linux.go 被 build-tag 排除，不需要 cilium/clang
+go build ./...        # loader_linux.go 被 build-tag 排除，走 loader_other.go stub，不需要 cilium/clang
 go test ./ebpf/       # 二进制分析测试：交叉编译 Linux 目标后解析
 ```
+
+> ⚠️ **Linux 主机**会编译 `loader_linux.go`，它引用 bpf2go 生成的符号（不入库）。直接
+> `go build ./...` 会报 `undefined: watchObjects`，需**先**生成（见下「Linux 完整链路」
+> 或 `cd ebpf && go generate ./...`，依赖 clang/libbpf）。
 
 **Linux 完整链路（OrbStack 示例）：**
 

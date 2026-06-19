@@ -4,7 +4,8 @@ import "fmt"
 
 // 以下变量由构建时通过 -ldflags "-X" 注入，源码直接运行时使用默认值。
 // 注入路径示例：
-//   go build -ldflags "-X github.com/songzhibin97/go-arthas/cli.Version=v1.0.0"
+//
+//	go build -ldflags "-X github.com/songzhibin97/go-arthas/cli.Version=v1.0.0"
 var (
 	Version   = "dev"
 	BuildTime = "unknown"

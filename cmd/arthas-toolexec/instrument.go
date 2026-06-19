@@ -127,6 +127,10 @@ func collectParams(fields *ast.FieldList) []string {
 
 // planResults 处理返回值：返回可引用的返回值名列表；若存在无名或 _ 返回值，
 // 生成把整个返回值签名改写为命名版本的编辑（命名返回值才能在 defer 中读取）。
+//
+// 改写时**保留已有的具名返回值**，只为无名或 _ 的返回值合成 __arthas_retN 名字。
+// 否则把整个签名重命名会丢弃函数体仍在引用的具名返回值（如 (a int, _ error)
+// 里的 a），导致织入后代码 `undefined: a` 编译失败。
 func planResults(src []byte, offOf func(token.Pos) int, results *ast.FieldList) ([]string, *edit) {
 	if results == nil || len(results.List) == 0 {
 		return nil, nil
@@ -157,17 +161,27 @@ func planResults(src []byte, offOf func(token.Pos) int, results *ast.FieldList) 
 
 	var names, parts []string
 	idx := 0
+	synth := func(typeText string) {
+		name := fmt.Sprintf("__arthas_ret%d", idx)
+		parts = append(parts, name+" "+typeText)
+		names = append(names, name)
+		idx++
+	}
 	for _, f := range results.List {
 		typeText := string(src[offOf(f.Type.Pos()):offOf(f.Type.End())])
-		count := len(f.Names)
-		if count == 0 {
-			count = 1
+		if len(f.Names) == 0 {
+			synth(typeText)
+			continue
 		}
-		for k := 0; k < count; k++ {
-			name := fmt.Sprintf("__arthas_ret%d", idx)
-			parts = append(parts, name+" "+typeText)
-			names = append(names, name)
-			idx++
+		for _, n := range f.Names {
+			if n.Name == "_" {
+				// _ 无法在 defer 中读取，合成一个可引用的名字
+				synth(typeText)
+				continue
+			}
+			// 保留原有具名返回值，函数体对它的引用才不会失效
+			parts = append(parts, n.Name+" "+typeText)
+			names = append(names, n.Name)
 		}
 	}
 	newSig := "(" + strings.Join(parts, ", ") + ")"

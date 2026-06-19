@@ -25,7 +25,7 @@ type GoroutineDump struct {
 	Timestamp   time.Time       `json:"timestamp"`                   // 抓取时间
 	Total       int             `json:"total"`                       // goroutine 总数
 	StateCounts map[string]int  `json:"state_counts"`                // 按状态聚合的计数
-	Suspected   []GoroutineInfo `json:"suspected_blocked,omitempty"` // 疑似长阻塞/死锁（始终带栈）
+	Suspected   []GoroutineInfo `json:"suspected_blocked,omitempty"` // 疑似长阻塞（runtime 标注 >=N 分钟，始终带栈）
 	Goroutines  []GoroutineInfo `json:"goroutines,omitempty"`        // 全部 goroutine（仅当请求 stacks 时填充）
 }
 
@@ -66,6 +66,12 @@ func parseGoroutineDump(raw []byte, includeStacks bool, suspectMinWait int, now 
 
 		// 疑似长阻塞：runtime 报告了 >=1 分钟的等待时长。这通常指示死锁、
 		// 泄漏或卡住的 goroutine（正常的长驻监听也可能出现，列为"疑似"供人工研判）。
+		//
+		// 局限（务必知晓）：本启发式只识别「长阻塞」，不做等待环（互相等待）分析。
+		// 且 Go runtime 仅对阻塞 >=60s 的 goroutine 标注分钟数（traceback：
+		// waitfor = (now-waitsince)/60e9，>=1 才打印），所以**刚发生的死锁在满
+		// 60 秒前不会出现在这里**。需要秒级或环检测时应配合 GODEBUG 调度跟踪/
+		// 多次采样比对，而非依赖本字段。
 		if suspectMinWait > 0 && gi.WaitMinutes >= suspectMinWait {
 			si := gi
 			si.Stack = strings.TrimRight(blk, "\n") // 疑似项始终带栈以便定位

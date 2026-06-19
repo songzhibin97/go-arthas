@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 
 	"github.com/songzhibin97/go-arthas/arthastrace"
 )
@@ -32,7 +33,17 @@ func (a *agent) handleTraceWatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing id parameter", http.StatusBadRequest)
 		return
 	}
-	on := r.URL.Query().Get("on") != "false" // 缺省为开启
+	// on 缺省开启；显式传值用 ParseBool 严格解析，拒绝 on=0xff 之类的笔误，
+	// 避免「只有字面量 false 才关闭、其余都开启」的开关陷阱。
+	on := true
+	if v := r.URL.Query().Get("on"); v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			http.Error(w, "invalid 'on' parameter (expect true/false)", http.StatusBadRequest)
+			return
+		}
+		on = parsed
+	}
 	arthastrace.SetWatch(id, on)
 	writeJSONResponse(w, map[string]interface{}{"id": id, "enabled": on})
 }

@@ -74,14 +74,23 @@ func TestOpenTargetAndResolve(t *testing.T) {
 			if ft.EntryAddr == 0 || ft.Size == 0 {
 				t.Errorf("bad func target: %+v", ft)
 			}
-			if len(ft.ReturnOffs) == 0 {
-				t.Error("expected at least one RET offset")
+			// main.Target 有两个 return 语句，编译器为每个出口各发一条 RET。
+			// 断言**精确数量**：仅检查 len>0 时，「只挂第一个 RET」这类回归不会被发现——
+			// 而漏挂 RET = 漏观察函数返回，正是 uprobe-on-RET 安全方案的核心前提。
+			const wantRets = 2
+			if len(ft.ReturnOffs) != wantRets {
+				t.Errorf("RET count = %d, want %d (offsets=%v)", len(ft.ReturnOffs), wantRets, ft.ReturnOffs)
 			}
-			// RET 偏移必须落在函数体内
+			// RET 偏移必须落在函数体内，且按反汇编顺序严格递增（不重复、不乱序）
+			prev := -1
 			for _, off := range ft.ReturnOffs {
 				if off >= ft.Size {
 					t.Errorf("RET offset %d out of function bounds (size %d)", off, ft.Size)
 				}
+				if int(off) <= prev {
+					t.Errorf("RET offsets not strictly increasing: %v", ft.ReturnOffs)
+				}
+				prev = int(off)
 			}
 		})
 	}

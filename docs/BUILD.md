@@ -27,6 +27,17 @@ go build -o bin/go-arthas ./cmd/go-arthas
 > 注意：`cli/` 是库包（`package cli`），**不能**用 `go build ./cli/main.go` 单文件构建，
 > 否则会报 `undefined: NewCLI` 等错误。必须构建 `./cmd/go-arthas`。
 
+> ⚠️ **Linux 构建额外前置**：CLI 依赖 `ebpf` 包，而 `ebpf/loader_linux.go`（`//go:build linux`）
+> 引用 bpf2go 生成的符号（`watchObjects` 等），这些产物不入库。**在 Linux 主机上**首次
+> 构建前必须先生成：
+>
+> ```bash
+> cd ebpf && go generate ./...   # 需要 clang/libbpf/bpftool，见 ebpf/README.md
+> ```
+>
+> 否则 `go build ./cmd/go-arthas`（及 `make build-cli`）会报 `undefined: watchObjects`。
+> 非 Linux 主机（macOS/Windows）走 `loader_other.go` stub，无需此步。
+
 注入版本信息：
 
 ```bash
