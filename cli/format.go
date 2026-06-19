@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strings"
 )
 
 // FormatMetrics 格式化并打印运行时指标
@@ -92,52 +91,4 @@ func FormatBytesSize(bytes uint64) string {
 // formatBytes 格式化字节数为人类可读格式（内部使用）
 func formatBytes(bytes uint64) string {
 	return FormatBytesSize(bytes)
-}
-
-// printTable 打印表格（通用函数）
-func printTable(headers []string, rows [][]string) {
-	if len(rows) == 0 {
-		return
-	}
-
-	// 计算每列的最大宽度
-	colWidths := make([]int, len(headers))
-	for i, header := range headers {
-		colWidths[i] = len(header)
-	}
-
-	for _, row := range rows {
-		for i, cell := range row {
-			if i < len(colWidths) && len(cell) > colWidths[i] {
-				colWidths[i] = len(cell)
-			}
-		}
-	}
-
-	// 打印表头
-	printRow(headers, colWidths)
-	printSeparator(colWidths)
-
-	// 打印数据行
-	for _, row := range rows {
-		printRow(row, colWidths)
-	}
-}
-
-// printRow 打印表格行
-func printRow(cells []string, widths []int) {
-	for i, cell := range cells {
-		if i < len(widths) {
-			fmt.Printf("%-*s", widths[i]+2, cell)
-		}
-	}
-	fmt.Println()
-}
-
-// printSeparator 打印表格分隔线
-func printSeparator(widths []int) {
-	for _, width := range widths {
-		fmt.Print(strings.Repeat("-", width+2))
-	}
-	fmt.Println()
 }

@@ -23,7 +23,6 @@ type agent struct {
 	server    *http.Server
 	collector *metricsCollector
 	wsManager *wsManager
-	mu        sync.Mutex
 	running   bool
 	startTime time.Time
 }

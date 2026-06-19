@@ -18,7 +18,6 @@ type metricsCollector struct {
 	stopped          bool             // 是否已停止
 	mu               sync.Mutex       // 保护 stopped 字段
 	wsManager        *wsManager       // WebSocket 管理器（可选）
-	cpuStatsWarned   bool             // CPU 统计不可用警告是否已发出
 	platformFeatures platformFeatures // 平台特性检测结果
 }
 
