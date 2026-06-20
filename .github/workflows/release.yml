@@ -69,21 +69,25 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Install eBPF toolchain (clang/llvm/libbpf/bpftool)
+      - name: Install eBPF toolchain (clang/llvm/libbpf + bpftool via linux-tools-generic)
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          # 用独立的 bpftool 包(noble universe 提供),不要用 linux-tools-$(uname -r):
-          # GitHub runner 是 Azure 内核,无对应 linux-tools 包,其 bpftool wrapper 会
-          # "not found for kernel" 失败。独立 bpftool 与运行内核版本无关,能 dump /sys BTF。
-          sudo apt-get install -y clang llvm libbpf-dev bpftool
-          command -v bpftool && bpftool version
+          # noble(24.04)无独立 bpftool 包;bpftool 随 linux-tools 提供。GitHub runner 是
+          # Azure 内核,无对应 linux-tools-$(uname -r),其 /usr/sbin/bpftool wrapper 会
+          # "not found for kernel" 失败。改装 linux-tools-generic 并直接软链其自带的 bpftool
+          # (版本无关,可 dump 任意 /sys/kernel/btf BTF;已在 noble 容器验证)。
+          sudo apt-get install -y clang llvm libbpf-dev linux-tools-common linux-tools-generic
+          BPFTOOL="$(ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | sort -V | tail -1)"
+          [ -x "$BPFTOOL" ] || { echo "generic bpftool not found"; exit 1; }
+          sudo ln -sf "$BPFTOOL" /usr/local/bin/bpftool
+          bpftool version
           test -f /sys/kernel/btf/vmlinux || { echo "runner kernel lacks BTF"; exit 1; }
       - name: Generate vmlinux.h + bpf2go bindings
         run: |
           set -euo pipefail
           mkdir -p ebpf/bpf/headers
-          sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > ebpf/bpf/headers/vmlinux.h
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > ebpf/bpf/headers/vmlinux.h
           ( cd ebpf && go generate ./... )
       - name: Build linux/${{ matrix.goarch }}
         run: |

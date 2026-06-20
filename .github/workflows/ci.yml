@@ -26,16 +26,19 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          # 独立 bpftool 包(与运行内核版本无关);勿用 linux-tools-$(uname -r):GitHub
-          # Azure 内核无对应包,wrapper 会 "not found for kernel" 失败。
-          sudo apt-get install -y clang llvm libbpf-dev bpftool
-          command -v bpftool && bpftool version
+          # noble 无独立 bpftool 包;改装 linux-tools-generic 并软链其自带 bpftool(GitHub
+          # Azure 内核无对应 linux-tools-$(uname -r),其 wrapper 会 "not found for kernel" 失败)。
+          sudo apt-get install -y clang llvm libbpf-dev linux-tools-common linux-tools-generic
+          BPFTOOL="$(ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | sort -V | tail -1)"
+          [ -x "$BPFTOOL" ] || { echo "generic bpftool not found"; exit 1; }
+          sudo ln -sf "$BPFTOOL" /usr/local/bin/bpftool
+          bpftool version
           test -f /sys/kernel/btf/vmlinux || { echo "runner kernel lacks BTF"; exit 1; }
       - name: Generate eBPF bindings
         run: |
           set -euo pipefail
           mkdir -p ebpf/bpf/headers
-          sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > ebpf/bpf/headers/vmlinux.h
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > ebpf/bpf/headers/vmlinux.h
           ( cd ebpf && go generate ./... )
       - name: go vet
         run: go vet ./...
@@ -56,16 +59,19 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          # 独立 bpftool 包(与运行内核版本无关);勿用 linux-tools-$(uname -r):GitHub
-          # Azure 内核无对应包,wrapper 会 "not found for kernel" 失败。
-          sudo apt-get install -y clang llvm libbpf-dev bpftool
-          command -v bpftool && bpftool version
+          # noble 无独立 bpftool 包;改装 linux-tools-generic 并软链其自带 bpftool(GitHub
+          # Azure 内核无对应 linux-tools-$(uname -r),其 wrapper 会 "not found for kernel" 失败)。
+          sudo apt-get install -y clang llvm libbpf-dev linux-tools-common linux-tools-generic
+          BPFTOOL="$(ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | sort -V | tail -1)"
+          [ -x "$BPFTOOL" ] || { echo "generic bpftool not found"; exit 1; }
+          sudo ln -sf "$BPFTOOL" /usr/local/bin/bpftool
+          bpftool version
           test -f /sys/kernel/btf/vmlinux || { echo "runner kernel lacks BTF"; exit 1; }
       - name: Generate eBPF bindings
         run: |
           set -euo pipefail
           mkdir -p ebpf/bpf/headers
-          sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > ebpf/bpf/headers/vmlinux.h
+          bpftool btf dump file /sys/kernel/btf/vmlinux format c > ebpf/bpf/headers/vmlinux.h
           ( cd ebpf && go generate ./... )
       - name: go test -race
         run: go test -race ./... -count=1 -timeout 30m
