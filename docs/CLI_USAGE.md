@@ -1,26 +1,30 @@
 # CLI 使用指南
 
-Go-Arthas CLI 工具提供命令行界面来与运行中的 Agent 交互，查看运行时指标和捕获性能分析数据。
+Go-Arthas CLI 工具提供命令行界面来与运行中的 Agent 交互，查看运行时指标、捕获性能分析数据，并对方法进行运行时观察。
 
 ## ⚠️ 重要说明
 
-**功能范围**：CLI 工具专注于**运行时指标查看和性能分析**，提供：
-- 查看实时运行时指标（CPU、内存、Goroutine、GC）
-- 查看系统信息
-- 捕获性能分析数据（CPU、Heap、Goroutine Profile）
-- 连接测试
+**功能范围**：CLI 工具提供以下能力：
 
-**不提供**（受 Go 语言特性限制）：
-- 方法级观察（如 Java Arthas 的 `watch`）
-- 调用链追踪（如 Java Arthas 的 `trace`）
-- 方法监控统计（如 Java Arthas 的 `monitor`）
-- 代码反编译（如 Java Arthas 的 `jad`）
-- 代码热更新（如 Java Arthas 的 `redefine`）
+无侵入、零代价的运行时观测（连接到正在运行的 Agent 即可使用）：
+- 查看实时运行时指标（CPU、内存、Goroutine、GC）—— `metrics`
+- 查看系统信息 —— `info`
+- 捕获性能分析数据（CPU、Heap、Goroutine Profile）—— `profile`
+- Goroutine 转储与长阻塞启发式诊断（对应 Arthas `thread`）—— `thread`
+- 执行轨迹飞行记录器（Go 1.25+，对应 `go tool trace`）—— `flight`
+- 连接测试 —— `connect`
 
-**替代方案**：
-- 调用链追踪：使用 [OpenTelemetry](https://opentelemetry.io/) 提前埋点
-- 方法监控：使用 [Prometheus](https://prometheus.io/) 手动添加 metrics
-- 详细对比：查看 [README 功能对比](../README.md#功能对比)
+方法级观察（对应 Java Arthas 的 `watch` / `tt` 时间隧道），通过以下两条路线之一启用，**有代价**：
+
+- **路线 B（编译期插桩，跨平台）**：用 `go-arthas build --targets "pkg.Func,..."` 在编译期对目标函数织入观察点，需要**重新编译并重启**目标程序。运行后用 `methods` 列出可观察方法、`watch` 动态开关并查看时间隧道记录。
+- **路线 A1（eBPF 零重启 attach，仅 Linux + root）**：用 `go-arthas attach <pid> --func <name>` 通过 eBPF uprobe 直接观察正在运行的进程，无需重启，但仅在 Linux 上以 root 运行。
+
+**仍不提供**（受 Go 语言特性限制）：
+- 方法级动态修改：代码反编译（Java Arthas 的 `jad`）、代码热更新（`redefine`）
+
+**关于调用链追踪**：跨服务的调用链追踪建议使用 [OpenTelemetry](https://opentelemetry.io/) 提前埋点。详细对比见 [README 功能对比](../README.md#功能对比)。
+
+方法级观察的原理与代价详见 [docs/BUILD.md](BUILD.md) 与 [ebpf/README.md](../ebpf/README.md)。
 
 ## 安装
 
@@ -59,11 +63,27 @@ go-arthas <command> [options]
 
 ### 全局选项
 
-- `--host <host:port>`: Agent 地址（默认: `localhost:8563`）
-- `--help`: 显示帮助信息
-- `--version`: 显示版本信息
+- `--host <host:port>`: Agent 地址（默认: `localhost:8563`），多数与 Agent 通信的命令都支持
+- `help` / `--help` / `-h`: 显示帮助信息
+- `version` / `--version` / `-v`: 显示版本信息
 
 ## 命令
+
+### connect - 连接测试
+
+连接到指定的 Agent 并验证连通性。
+
+**用法**:
+```bash
+go-arthas connect <host:port>
+```
+
+**示例**:
+```bash
+go-arthas connect localhost:8563
+```
+
+成功时输出 `Successfully connected to <host:port>`。
 
 ### metrics - 查看运行时指标
 
@@ -135,18 +155,20 @@ Start Time:  2024-01-15 09:15:30
 Uptime:      1h15m15s
 ```
 
+> **注意**：`profile` 仅支持 `cpu`、`heap`、`goroutine` 三种类型。
+> 输出文件名由工具自动生成（`<type>_profile_<timestamp>.pprof`，保存在当前目录），不支持自定义输出路径。
+
 ### profile cpu - 捕获 CPU Profile
 
 捕获指定时长的 CPU profile，用于分析 CPU 热点。
 
 **用法**:
 ```bash
-go-arthas profile cpu [--host <host:port>] [--duration <seconds>] [--output <file>]
+go-arthas profile cpu [--host <host:port>] [--duration <seconds>]
 ```
 
 **选项**:
 - `--duration <seconds>`: Profile 持续时间（默认: 30 秒）
-- `--output <file>`: 输出文件路径（默认: `cpu-<timestamp>.prof`）
 
 **示例**:
 ```bash
@@ -155,18 +177,15 @@ go-arthas profile cpu
 
 # 捕获 60 秒的 CPU profile
 go-arthas profile cpu --duration 60
-
-# 指定输出文件
-go-arthas profile cpu --output my-cpu-profile.prof
 ```
 
 **分析 Profile**:
 ```bash
-# 使用 go tool pprof 分析
-go tool pprof cpu-20240115-103045.prof
+# 使用 go tool pprof 分析（文件名形如 cpu_profile_20240115_103045.pprof）
+go tool pprof cpu_profile_20240115_103045.pprof
 
 # 生成火焰图
-go tool pprof -http=:8080 cpu-20240115-103045.prof
+go tool pprof -http=:8080 cpu_profile_20240115_103045.pprof
 ```
 
 ### profile heap - 捕获堆 Profile
@@ -175,31 +194,25 @@ go tool pprof -http=:8080 cpu-20240115-103045.prof
 
 **用法**:
 ```bash
-go-arthas profile heap [--host <host:port>] [--output <file>]
+go-arthas profile heap [--host <host:port>]
 ```
-
-**选项**:
-- `--output <file>`: 输出文件路径（默认: `heap-<timestamp>.prof`）
 
 **示例**:
 ```bash
 # 捕获堆 profile
 go-arthas profile heap
-
-# 指定输出文件
-go-arthas profile heap --output my-heap-profile.prof
 ```
 
 **分析 Profile**:
 ```bash
 # 查看 top 分配
-go tool pprof -top heap-20240115-103045.prof
+go tool pprof -top heap_profile_20240115_103045.pprof
 
 # 交互式分析
-go tool pprof heap-20240115-103045.prof
+go tool pprof heap_profile_20240115_103045.pprof
 
 # Web UI
-go tool pprof -http=:8080 heap-20240115-103045.prof
+go tool pprof -http=:8080 heap_profile_20240115_103045.pprof
 ```
 
 ### profile goroutine - 捕获 Goroutine Profile
@@ -208,67 +221,192 @@ go tool pprof -http=:8080 heap-20240115-103045.prof
 
 **用法**:
 ```bash
-go-arthas profile goroutine [--host <host:port>] [--output <file>]
+go-arthas profile goroutine [--host <host:port>]
 ```
-
-**选项**:
-- `--output <file>`: 输出文件路径（默认: `goroutine-<timestamp>.prof`）
 
 **示例**:
 ```bash
 # 捕获 goroutine profile
 go-arthas profile goroutine
-
-# 指定输出文件
-go-arthas profile goroutine --output my-goroutine-profile.prof
 ```
 
 **分析 Profile**:
 ```bash
 # 查看所有 goroutine
-go tool pprof -text goroutine-20240115-103045.prof
+go tool pprof -text goroutine_profile_20240115_103045.pprof
 
 # 查看特定状态的 goroutine
-go tool pprof -text -focus="runtime.gopark" goroutine-20240115-103045.prof
+go tool pprof -text -focus="runtime.gopark" goroutine_profile_20240115_103045.pprof
 ```
 
-### profile block - 捕获阻塞 Profile
+> 如需对 goroutine 做状态聚合与长阻塞快速诊断而无需 pprof，请使用下面的 `thread` 命令。
 
-捕获阻塞操作的 profile，用于分析锁竞争和通道阻塞。
+### thread - Goroutine 转储与阻塞诊断
+
+对应 Java Arthas 的 `thread`。从 Agent 拉取 goroutine 转储，按状态聚合并用启发式标记疑似长时间阻塞的 goroutine。
 
 **用法**:
 ```bash
-go-arthas profile block [--host <host:port>] [--output <file>]
+go-arthas thread [--host <host:port>] [--full] [--stacks] [--min-wait <minutes>]
 ```
 
-**注意**: 需要在应用程序中启用阻塞 profile：
-```go
-runtime.SetBlockProfileRate(1)
+**选项**:
+- `--full`: 打印所有 goroutine 的原始完整堆栈（等价于 `runtime.Stack` 全量文本）
+- `--stacks`: 在结构化输出中包含每个 goroutine 的堆栈
+- `--min-wait <minutes>`: 将阻塞时间 >= N 分钟的 goroutine 标记为疑似阻塞（默认: 1）
+
+**示例**:
+```bash
+# 状态聚合 + 疑似阻塞概览
+go-arthas thread
+
+# 把阻塞超过 5 分钟的标记为疑似
+go-arthas thread --min-wait 5
+
+# 结构化输出中带上各 goroutine 堆栈
+go-arthas thread --stacks
+
+# 打印全量原始堆栈
+go-arthas thread --full
+```
+
+### flight - 执行轨迹飞行记录器
+
+基于 Go 1.25+ 的 Flight Recorder 录制执行轨迹（execution trace），产出可用 `go tool trace` 分析的 trace 文件。
+
+**用法**:
+```bash
+go-arthas flight <start|snapshot|stop> [--host <host:port>]
+```
+
+**子命令**:
+- `start`: 启动飞行记录器
+- `snapshot`: 下载当前轨迹快照并保存为 `flight_<timestamp>.trace`（当前目录）
+- `stop`: 停止飞行记录器
+
+**示例**:
+```bash
+# 开始录制
+go-arthas flight start
+
+# 在问题发生时抓取一段快照
+go-arthas flight snapshot
+
+# 停止录制
+go-arthas flight stop
+
+# 分析轨迹（文件名形如 flight_20240115_103045.trace）
+go tool trace flight_20240115_103045.trace
+```
+
+### methods - 列出可观察方法
+
+列出在编译期通过 `go-arthas build` 织入并注册的可观察方法及其 id。`watch` 命令需要这些 id。
+
+**用法**:
+```bash
+go-arthas methods [--host <host:port>]
 ```
 
 **示例**:
 ```bash
-go-arthas profile block
+go-arthas methods
 ```
 
-### profile mutex - 捕获互斥锁 Profile
+> 该列表仅包含通过路线 B（编译期插桩）织入的方法；未经 `go-arthas build` 重新编译的程序，此处为空。
 
-捕获互斥锁竞争的 profile，用于分析锁竞争问题。
+### watch - 动态开关方法观察 / 查看时间隧道
+
+对应 Java Arthas 的 `watch` 与 `tt`（时间隧道）。在运行时动态开启/关闭某个已织入方法的观察，或查看其已记录的调用。
+
+> **前提**：目标方法必须已通过 `go-arthas build --targets ...` 在编译期织入观察点（见下文 `build`）。方法 id 来自 `methods` 命令。
 
 **用法**:
 ```bash
-go-arthas profile mutex [--host <host:port>] [--output <file>]
+go-arthas watch <id> [--off] [--records] [--host <host:port>]
 ```
 
-**注意**: 需要在应用程序中启用互斥锁 profile：
-```go
-runtime.SetMutexProfileFraction(1)
-```
+**选项**:
+- `<id>`: 方法 id（必填，来自 `methods`）
+- `--off`: 关闭该方法的观察（默认是开启）
+- `--records`: 查看该方法已记录的调用（时间隧道），而不是开关观察
 
 **示例**:
 ```bash
-go-arthas profile mutex
+# 开启某方法的观察
+go-arthas watch main.handler
+
+# 关闭观察
+go-arthas watch main.handler --off
+
+# 查看已记录的调用（时间隧道）
+go-arthas watch main.handler --records
 ```
+
+### build - 编译期织入观察点构建（路线 B，跨平台）
+
+用编译期插桩（`go build -toolexec`）对指定函数织入观察点后构建目标程序。这是跨平台的方法级观察路线，**代价是需要重新编译并重启目标程序**。
+
+**用法**:
+```bash
+go-arthas build --targets "pkg.Func,..." [透传给 go build 的参数]
+```
+
+**说明**:
+- `--targets "pkg.Func,..."`: 逗号分隔的目标函数列表（必填）
+- 其余参数原样透传给底层 `go build`（如 `-o`、`-tags`、包路径 `./...` 等）
+- 目标二进制必须导入 `arthastrace` 包（导入 go-arthas agent 时会自动引入）
+
+**示例**:
+```bash
+# 织入两个函数并构建当前目录的程序，输出到 ./app
+go-arthas build --targets "main.handler,main.process" -o ./app .
+
+# 之后运行 ./app，再用 methods/watch 进行观察
+```
+
+详见 [docs/BUILD.md](BUILD.md)。
+
+### attach - eBPF 零重启观察（路线 A1，仅 Linux + root）
+
+通过 eBPF uprobe 直接挂载到**正在运行**的 Go 进程上观察函数调用，无需重启目标程序。
+
+> **限制**：仅在 **Linux** 上、以 **root** 运行。其它平台不可用。
+
+**用法**:
+```bash
+go-arthas attach <pid> --func <name> [--func <name> ...] [--list <substr>] [--bin <path>] [--duration <dur>]
+```
+
+**选项**:
+- `<pid>`: 目标进程 PID（必填）
+- `--func <name>`: 要观察的函数符号，可重复指定，例如 `main.handler`
+- `--list <substr>`: 列出符号中包含该子串的函数，然后退出（用于查找函数名）
+- `--bin <path>`: 目标二进制路径（默认 `/proc/<pid>/exe`）
+- `--duration <dur>`: 观察时长，Go duration 格式（默认: `30s`）
+
+**示例**:
+```bash
+# 先查找包含 handler 的函数符号
+sudo go-arthas attach 12345 --list handler
+
+# 观察 main.handler 60 秒
+sudo go-arthas attach 12345 --func main.handler --duration 60s
+
+# 同时观察多个函数
+sudo go-arthas attach 12345 --func main.handler --func main.process
+```
+
+详见 [ebpf/README.md](../ebpf/README.md)。
+
+### version - 查看版本信息
+
+**用法**:
+```bash
+go-arthas version
+```
+
+输出版本号、构建时间和 git commit（源码直接运行时显示默认值 `dev`）。
 
 ## 使用场景
 
@@ -282,8 +420,8 @@ go-arthas metrics
 go-arthas profile cpu --duration 60
 
 # 3. 分析 profile 找出热点
-go tool pprof -top cpu-*.prof
-go tool pprof -http=:8080 cpu-*.prof
+go tool pprof -top cpu_profile_*.pprof
+go tool pprof -http=:8080 cpu_profile_*.pprof
 ```
 
 ### 场景 2: 诊断内存泄漏
@@ -300,8 +438,8 @@ go-arthas metrics
 go-arthas profile heap
 
 # 4. 分析 profile 找出内存分配热点
-go tool pprof -top heap-*.prof
-go tool pprof -http=:8080 heap-*.prof
+go tool pprof -top heap_profile_*.pprof
+go tool pprof -http=:8080 heap_profile_*.pprof
 ```
 
 ### 场景 3: 诊断 Goroutine 泄漏
@@ -318,21 +456,41 @@ go-arthas metrics
 go-arthas profile goroutine
 
 # 4. 分析 profile 找出泄漏的 goroutine
-go tool pprof -text goroutine-*.prof
+go tool pprof -text goroutine_profile_*.pprof
+
+# 也可以直接用 thread 看状态聚合与疑似长阻塞
+go-arthas thread --stacks
 ```
 
-### 场景 4: 诊断锁竞争
+### 场景 4: 诊断阻塞 / 卡死
 
 ```bash
-# 1. 确保应用程序启用了 mutex profile
-# runtime.SetMutexProfileFraction(1)
+# 1. 转储 goroutine，按状态聚合并标记疑似长阻塞
+go-arthas thread
 
-# 2. 捕获 mutex profile
-go-arthas profile mutex
+# 2. 把阻塞超过 5 分钟的标记为疑似，并打印其堆栈
+go-arthas thread --min-wait 5 --stacks
 
-# 3. 分析 profile 找出竞争热点
-go tool pprof -top mutex-*.prof
-go tool pprof -http=:8080 mutex-*.prof
+# 3. 若需细粒度的执行轨迹（调度、系统调用、GC 等），用飞行记录器
+go-arthas flight start
+# 复现问题后抓取快照
+go-arthas flight snapshot
+go-arthas flight stop
+go tool trace flight_*.trace
+```
+
+### 场景 5: 方法级观察（watch / 时间隧道）
+
+```bash
+# 路线 B（跨平台，需重新编译并重启目标程序）
+go-arthas build --targets "main.handler" -o ./app .
+./app &
+go-arthas methods                 # 列出可观察方法及 id
+go-arthas watch main.handler      # 开启观察
+go-arthas watch main.handler --records  # 查看已记录调用（时间隧道）
+
+# 路线 A1（仅 Linux + root，零重启）
+sudo go-arthas attach <pid> --func main.handler --duration 60s
 ```
 
 ## 错误处理
@@ -419,12 +577,15 @@ go-arthas metrics --host localhost:8563
 #!/bin/bash
 # auto-profile.sh - 自动捕获和分析 profile
 
-# 捕获 CPU profile
-go-arthas profile cpu --duration 30 --output cpu.prof
+# 捕获 CPU profile（文件自动命名为 cpu_profile_<timestamp>.pprof，保存在当前目录）
+go-arthas profile cpu --duration 30
+
+# 取最新生成的 CPU profile 文件
+PROF=$(ls -t cpu_profile_*.pprof | head -n1)
 
 # 生成报告
-go tool pprof -text cpu.prof > cpu-report.txt
-go tool pprof -pdf cpu.prof > cpu-report.pdf
+go tool pprof -text "$PROF" > cpu-report.txt
+go tool pprof -pdf  "$PROF" > cpu-report.pdf
 
 # 发送报告
 mail -s "CPU Profile Report" admin@example.com < cpu-report.txt

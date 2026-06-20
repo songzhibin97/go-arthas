@@ -4,7 +4,7 @@
       <div class="container">
         <h1>Go-Arthas Console</h1>
         <p>实时监控和性能分析工具</p>
-        <p class="note">专注于运行时指标监控，不提供方法级诊断功能</p>
+        <p class="note">运行时指标与协程诊断面板;方法级 watch/trace 与 eBPF attach 见 CLI</p>
       </div>
     </header>
     
