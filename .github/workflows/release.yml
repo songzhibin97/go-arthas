@@ -1,0 +1,161 @@
+name: release
+
+# 全平台二进制打包并上传到 GitHub Release。
+# - 非 Linux 目标(darwin/windows)走 loader_other.go stub,无 eBPF 依赖,单台 ubuntu 交叉编译。
+# - Linux 目标含 eBPF:bpf2go 产物与 BTF/架构绑定,因此每个架构在对应架构的 runner 上
+#   用本机 /sys/kernel/btf/vmlinux 生成本架构 bpf 对象后再构建(amd64 runner 造 amd64,
+#   arm64 runner 造 arm64)。这正是本地单 arm64 环境造不出 amd64 eBPF 的根因。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要构建并附加资产的 tag(如 v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-cross:
+    name: build non-linux (darwin/windows)
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build darwin/windows binaries
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z._-]+$ ]] || { echo "bad tag: $RELEASE_TAG"; exit 1; }
+          BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          LDFLAGS="-s -w -X github.com/songzhibin97/go-arthas/cli.Version=${RELEASE_TAG} -X github.com/songzhibin97/go-arthas/cli.BuildTime=${BUILD_TIME} -X github.com/songzhibin97/go-arthas/cli.GitCommit=${GIT_COMMIT}"
+          mkdir -p dist
+          for p in darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS="${p%/*}"; GOARCH="${p#*/}"
+            out="go-arthas-${GOOS}-${GOARCH}"; [ "$GOOS" = windows ] && out="${out}.exe"
+            GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath -ldflags="$LDFLAGS" -o "dist/${out}" ./cmd/go-arthas
+            echo "built ${out}"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-cross
+          path: dist/*
+
+  build-linux:
+    name: build linux/${{ matrix.goarch }} (with eBPF)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+            runner: ubuntu-latest
+          - goarch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install eBPF toolchain (clang/llvm/libbpf/bpftool)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y clang llvm libbpf-dev
+          if ! command -v bpftool >/dev/null 2>&1; then
+            sudo apt-get install -y "linux-tools-$(uname -r)" \
+              || sudo apt-get install -y linux-tools-generic \
+              || sudo apt-get install -y bpftool
+          fi
+          command -v bpftool
+          test -f /sys/kernel/btf/vmlinux || { echo "runner kernel lacks BTF"; exit 1; }
+      - name: Generate vmlinux.h + bpf2go bindings
+        run: |
+          set -euo pipefail
+          mkdir -p ebpf/bpf/headers
+          sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > ebpf/bpf/headers/vmlinux.h
+          ( cd ebpf && go generate ./... )
+      - name: Build linux/${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z._-]+$ ]] || { echo "bad tag: $RELEASE_TAG"; exit 1; }
+          BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
+          GIT_COMMIT=$(git rev-parse --short HEAD)
+          LDFLAGS="-s -w -X github.com/songzhibin97/go-arthas/cli.Version=${RELEASE_TAG} -X github.com/songzhibin97/go-arthas/cli.BuildTime=${BUILD_TIME} -X github.com/songzhibin97/go-arthas/cli.GitCommit=${GIT_COMMIT}"
+          mkdir -p dist
+          GOOS=linux GOARCH="${{ matrix.goarch }}" go build -trimpath -ldflags="$LDFLAGS" -o "dist/go-arthas-linux-${{ matrix.goarch }}" ./cmd/go-arthas
+          ./dist/go-arthas-linux-${{ matrix.goarch }} version
+      - name: eBPF unit tests
+        run: go test ./ebpf/ -count=1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-linux-${{ matrix.goarch }}
+          path: dist/*
+
+  build-web:
+    name: build web console
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build web console
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z._-]+$ ]] || { echo "bad tag: $RELEASE_TAG"; exit 1; }
+          ( cd web && (npm ci || npm install) && npm run build )
+          mkdir -p dist
+          tar -czf "dist/go-arthas-web-${RELEASE_TAG}.tar.gz" -C web/dist .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: dist/*
+
+  release:
+    name: checksums + upload to release
+    needs: [build-cross, build-linux, build-web]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Collect artifacts + checksums
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -type f -exec cp -f {} dist/ \;
+          ( cd dist && sha256sum go-arthas-* > checksums.txt )
+          ls -lh dist
+      - name: Upload assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z._-]+$ ]] || { echo "bad tag: $RELEASE_TAG"; exit 1; }
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

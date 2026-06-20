@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: build + vet + test (linux/amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+      - name: Install eBPF toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y clang llvm libbpf-dev
+          if ! command -v bpftool >/dev/null 2>&1; then
+            sudo apt-get install -y "linux-tools-$(uname -r)" || sudo apt-get install -y linux-tools-generic || sudo apt-get install -y bpftool
+          fi
+          test -f /sys/kernel/btf/vmlinux || { echo "runner kernel lacks BTF"; exit 1; }
+      - name: Generate eBPF bindings
+        run: |
+          set -euo pipefail
+          mkdir -p ebpf/bpf/headers
+          sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > ebpf/bpf/headers/vmlinux.h
+          ( cd ebpf && go generate ./... )
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test
+        run: go test ./... -count=1 -timeout 20m
+
+  test-race:
+    name: race detector (linux/amd64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install eBPF toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y clang llvm libbpf-dev
+          if ! command -v bpftool >/dev/null 2>&1; then
+            sudo apt-get install -y "linux-tools-$(uname -r)" || sudo apt-get install -y linux-tools-generic || sudo apt-get install -y bpftool
+          fi
+          test -f /sys/kernel/btf/vmlinux || { echo "runner kernel lacks BTF"; exit 1; }
+      - name: Generate eBPF bindings
+        run: |
+          set -euo pipefail
+          mkdir -p ebpf/bpf/headers
+          sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c > ebpf/bpf/headers/vmlinux.h
+          ( cd ebpf && go generate ./... )
+      - name: go test -race
+        run: go test -race ./... -count=1 -timeout 30m
