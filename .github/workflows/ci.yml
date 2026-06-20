@@ -26,10 +26,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y clang llvm libbpf-dev
-          if ! command -v bpftool >/dev/null 2>&1; then
-            sudo apt-get install -y "linux-tools-$(uname -r)" || sudo apt-get install -y linux-tools-generic || sudo apt-get install -y bpftool
-          fi
+          # 独立 bpftool 包(与运行内核版本无关);勿用 linux-tools-$(uname -r):GitHub
+          # Azure 内核无对应包,wrapper 会 "not found for kernel" 失败。
+          sudo apt-get install -y clang llvm libbpf-dev bpftool
+          command -v bpftool && bpftool version
           test -f /sys/kernel/btf/vmlinux || { echo "runner kernel lacks BTF"; exit 1; }
       - name: Generate eBPF bindings
         run: |
@@ -56,10 +56,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y clang llvm libbpf-dev
-          if ! command -v bpftool >/dev/null 2>&1; then
-            sudo apt-get install -y "linux-tools-$(uname -r)" || sudo apt-get install -y linux-tools-generic || sudo apt-get install -y bpftool
-          fi
+          # 独立 bpftool 包(与运行内核版本无关);勿用 linux-tools-$(uname -r):GitHub
+          # Azure 内核无对应包,wrapper 会 "not found for kernel" 失败。
+          sudo apt-get install -y clang llvm libbpf-dev bpftool
+          command -v bpftool && bpftool version
           test -f /sys/kernel/btf/vmlinux || { echo "runner kernel lacks BTF"; exit 1; }
       - name: Generate eBPF bindings
         run: |

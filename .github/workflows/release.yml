@@ -73,13 +73,11 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y clang llvm libbpf-dev
-          if ! command -v bpftool >/dev/null 2>&1; then
-            sudo apt-get install -y "linux-tools-$(uname -r)" \
-              || sudo apt-get install -y linux-tools-generic \
-              || sudo apt-get install -y bpftool
-          fi
-          command -v bpftool
+          # 用独立的 bpftool 包(noble universe 提供),不要用 linux-tools-$(uname -r):
+          # GitHub runner 是 Azure 内核,无对应 linux-tools 包,其 bpftool wrapper 会
+          # "not found for kernel" 失败。独立 bpftool 与运行内核版本无关,能 dump /sys BTF。
+          sudo apt-get install -y clang llvm libbpf-dev bpftool
+          command -v bpftool && bpftool version
           test -f /sys/kernel/btf/vmlinux || { echo "runner kernel lacks BTF"; exit 1; }
       - name: Generate vmlinux.h + bpf2go bindings
         run: |
