@@ -1,18 +1,27 @@
 # Go-Arthas
 
-> ⚠️ **重要说明**：Go-Arthas 是一个受 [Alibaba Arthas](https://github.com/alibaba/arthas) 启发的 Go 应用监控工具。由于 Go 语言特性限制，本项目**专注于运行时监控和性能分析**，无法实现 Java Arthas 的方法级诊断功能（如 watch、trace、monitor 等）。详见[功能对比](#功能对比)。
+[![CI](https://github.com/songzhibin97/go-arthas/actions/workflows/ci.yml/badge.svg)](https://github.com/songzhibin97/go-arthas/actions/workflows/ci.yml)
+[![Release](https://github.com/songzhibin97/go-arthas/actions/workflows/release.yml/badge.svg)](https://github.com/songzhibin97/go-arthas/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/songzhibin97/go-arthas?sort=semver)](https://github.com/songzhibin97/go-arthas/releases/latest)
+[![Go Reference](https://pkg.go.dev/badge/github.com/songzhibin97/go-arthas.svg)](https://pkg.go.dev/github.com/songzhibin97/go-arthas)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/songzhibin97/go-arthas)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Go-Arthas 是一个用于 Go 应用程序的**运行时监控和性能分析工具**，灵感来自 Java Arthas。它提供运行时指标监控、性能分析和诊断能力，通过嵌入式 SDK 集成到目标应用程序中。
+> Go-Arthas 是一个受 [Alibaba Arthas](https://github.com/alibaba/arthas) 启发的 Go 应用**诊断工具**。除运行时指标与 pprof 外,它通过**三条互补路线**逼近 Arthas 的方法级诊断:① 只读诊断(`thread`/`flight`,跨平台、零依赖)② 编译期插桩 `watch`/`trace`/`tt`(可生产,需用 go-arthas 构建包装器重编译)③ eBPF 零重启 `attach`(Linux + root)。`jad`/`redefine`/`ognl` 因 Go 无字节码/类加载器/内置表达式引擎,不做对等。详见 [ROADMAP](docs/ROADMAP.md) 与下方[功能对比](#功能对比)。
+
+Go-Arthas 提供运行时指标监控、性能分析与方法级诊断,通过嵌入式 SDK(只读/编译期路线)或 eBPF(零重启路线)集成到目标应用程序。
 
 ## 特性
 
 - **轻量级集成**: 只需几行代码即可集成到现有应用程序
 - **实时指标**: 监控 goroutine、内存、CPU 和 GC 统计信息
 - **性能分析**: 集成 Go 的 pprof，支持 CPU、内存、goroutine 等 profile
+- **在线诊断**: `thread`（goroutine 全量 dump + 状态聚合 + 长阻塞启发式）、`flight`（Go 1.25 Flight Recorder 执行轨迹回放）—— 跨平台、零依赖
+- **方法级 watch/trace/tt**: 编译期插桩（路线 B，可生产、跨平台，需用 `go-arthas build` 重编译），捕获入参/返回值/panic/耗时/调用栈，运行时经控制面动态开关
+- **eBPF 零重启 attach**: 对未经特殊编译的现网进程零重启注入方法级观察（路线 A1，Linux + root + 内核 BTF；uprobe-on-RET，绝不用会崩溃 Go 的 uretprobe）
 - **多种接口**: HTTP API、WebSocket 实时更新、CLI 工具、Web Console
-- **低开销**: CPU 开销 < 5%，内存开销 < 50MB
-- **生产就绪**: 故障安全设计，Agent 失败不会影响应用程序
-- **跨平台**: 支持 Linux、macOS、Windows（amd64、arm64）
+- **生产就绪**: 故障安全设计，Agent/诊断失败不影响目标应用
+- **跨平台**: 只读诊断与编译期插桩支持 Linux、macOS、Windows（amd64、arm64）；eBPF attach 仅 Linux
 
 ## 快速开始
 
@@ -316,11 +325,12 @@ config := agent.Config{
 
 ## 系统要求
 
-- Go 1.18 或更高版本
+- Go 1.25+（`flight` 执行轨迹依赖 Go 1.25 的 Flight Recorder；仓库 `go.mod` 为 1.25）
 - 支持的操作系统:
   - Linux (amd64, arm64)
   - macOS (amd64, arm64)
-  - Windows (amd64)
+  - Windows (amd64, arm64)
+- eBPF `attach`（路线 A1）额外要求：Linux + root（或 CAP_BPF + CAP_PERFMON）+ 内核 ≥ 5.15 且启用 BTF（`/sys/kernel/btf/vmlinux`）
 
 ## 开发
 
@@ -354,7 +364,12 @@ go test -bench=. ./...
 
 # 运行竞态检测
 go test -race ./...
+
+# 运行环境敏感的性能/资源基准（默认跳过；绝对时序/内存阈值,需在空闲机器上单独运行）
+make test-perf            # 等价于 ARTHAS_PERF_TESTS=1 go test -run TestPerformance ./...
 ```
+
+> eBPF 相关构建/测试需在 Linux 上先生成 bpf2go 产物：`cd ebpf && go generate ./...`（需 clang/libbpf/bpftool + 内核 BTF，详见 [ebpf/README.md](ebpf/README.md)）。CI 已自动处理(见 `.github/workflows/`)。
 
 ### 代码覆盖率
 
@@ -380,38 +395,35 @@ make coverage
 
 ### 与 Alibaba Arthas (Java) 的对比
 
-Go-Arthas 受 Alibaba Arthas 启发，但由于 Go 语言特性限制，功能范围有所不同。**详细对比请查看 [功能对比文档](docs/COMPARISON.md)**。
+Go-Arthas 受 Alibaba Arthas 启发。Go 在语言层面注定无法复刻 Arthas「纯运行时 attach 任意方法、零重启、跨平台」的单一体验,但通过**编译期插桩 + eBPF + Go 原生能力**三者组合,可逼近其大部分核心命令。**详细对比请查看 [功能对比文档](docs/COMPARISON.md)、[ROADMAP](docs/ROADMAP.md)**。
 
 | 功能类别 | Alibaba Arthas (Java) | Go-Arthas | 说明 |
 |---------|----------------------|-----------|------|
 | **基础监控** | ✅ | ✅ | CPU、内存、线程/Goroutine、GC |
-| **性能分析** | ✅ | ✅ | CPU/内存 Profile、火焰图 |
-| **方法观察** | ✅ watch | ❌ | Go 反射能力有限，无法实现 |
-| **调用追踪** | ✅ trace | ❌ | 需要字节码增强，Go 不支持 |
-| **方法监控** | ✅ monitor | ❌ | 无法动态统计单个函数 |
-| **反编译** | ✅ jad | ❌ | Go 编译成机器码，无法反编译 |
-| **热更新** | ✅ redefine | ❌ | Go 是静态编译语言 |
-| **时间隧道** | ✅ tt | ❌ | 无法拦截函数调用 |
+| **性能分析** | ✅ | ✅ | CPU/内存/goroutine Profile（pprof） |
+| **线程/协程栈** | ✅ thread | ✅ `thread` | `runtime.Stack` 全量 dump + 状态聚合 + 长阻塞启发式 |
+| **执行轨迹** | ✅ | ✅ `flight` | Go 1.25 Flight Recorder 环形缓冲回放 |
+| **方法观察** | ✅ watch | ✅ | 编译期插桩（可生产，需重编译）**或** eBPF `attach`（Linux+root，零重启） |
+| **调用追踪** | ✅ trace | ✅ | 同上（入口 OnEnter / `defer` OnExit / `recover` 织入；或每个 RET 挂 uprobe） |
+| **方法监控** | ✅ monitor | ✅（基础） | 织入计数（调用次数）；更丰富的成功率/RT 统计为后续 |
+| **时间隧道** | ✅ tt | ✅ | 编译期插桩：环形缓冲记录每次调用的入参/返回/耗时快照 |
+| **反编译** | ✅ jad | ❌ | Go 编译为机器码、无字节码，不可行 |
+| **热更新** | ✅ redefine | ❌ | Go 无类加载器热替换（仅 monkey-patch 测试级），不做 |
+| **表达式求值** | ✅ ognl | ❌ | Go 无内置表达式引擎，无法访问进程内运行时变量 |
 
-**Go 生态的替代方案**：
-- 调用链追踪：[OpenTelemetry](https://opentelemetry.io/)
-- 方法监控：[Prometheus](https://prometheus.io/) + 手动埋点
-- 分布式追踪：[Jaeger](https://www.jaegertracing.io/)
+> 注意:eBPF 路线下复合类型(结构体/接口/string)目前以原始寄存器值暴露,完整解释需结合 DWARF(后续);amd64 实机 attach 待在 x86 Linux 上验证(逻辑有交叉编译单测覆盖)。
 
 ### Go-Arthas 的定位
 
-Go-Arthas 是一个**运行时监控和性能分析工具**，提供：
-- 实时指标监控（比原生 pprof 更友好）
-- WebSocket 实时推送（pprof 不支持）
-- CLI 工具和 Web Console（更好的用户体验）
-- 低开销、生产就绪
+通过**三条互补路线**在 Go 上逼近 Arthas 的方法级诊断:
 
-**不提供**（受 Go 语言特性限制）：
-- 方法级诊断（watch、trace、monitor）
-- 代码操作（jad、redefine）
-- 动态表达式（ognl）
+- **只读诊断**(跨平台、零依赖、零风险):`thread` / `flight` / 指标 / pprof —— 纯 Go 标准库,全平台可用。
+- **编译期插桩**(路线 B,可生产、跨平台):`watch` / `trace` / `tt`,代价是目标用 `go-arthas build` 重编译;运行时经控制面动态开关,关闭时开销可忽略。
+- **eBPF 零重启 attach**(路线 A1):attach 未经特殊编译的现网进程,代价是 Linux + root + 较新内核(BTF)。
 
-这不是项目缺陷，而是 Go 语言的设计理念和技术限制。详见 [功能对比文档](docs/COMPARISON.md)。
+**明确不做**(Go 无对应能力):`jad`(无字节码)、`redefine`(无类加载器热替换)、`ognl`(无内置表达式引擎)。生产级分布式追踪可结合 [OpenTelemetry](https://opentelemetry.io/) / [Jaeger](https://www.jaegertracing.io/)。
+
+详见 [ROADMAP](docs/ROADMAP.md) 与[功能对比文档](docs/COMPARISON.md)。
 
 ## 文档
 
